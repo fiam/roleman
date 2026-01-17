@@ -9,11 +9,11 @@ mod sso_cache;
 mod tui;
 mod ui;
 
+use crate::config::{Config, SsoIdentity};
 pub use crate::error::{Error, Result};
 use crate::model::{EnvVars, RoleChoice};
-use crate::config::{Config, SsoIdentity};
-use std::path::{Path, PathBuf};
 use futures::StreamExt;
+use std::path::{Path, PathBuf};
 use tracing::debug;
 
 pub struct App {
@@ -41,7 +41,6 @@ pub struct AppOptions {
     pub action: AppAction,
 }
 
-
 impl App {
     pub fn new(options: AppOptions) -> Self {
         Self { options }
@@ -50,22 +49,14 @@ impl App {
     pub async fn run(&self) -> Result<()> {
         let (mut config, config_path) = Config::load(self.options.config_path.as_deref())?;
         let config_exists = config_path.exists();
-        let identity = resolve_identity(
-            &self.options,
-            &mut config,
-            &config_path,
-            config_exists,
-        )?;
+        let identity = resolve_identity(&self.options, &mut config, &config_path, config_exists)?;
         let start_url = identity.start_url.clone();
         let sso_region = Some(identity.sso_region.clone());
         let refresh_seconds = self.options.refresh_seconds.or(config.refresh_seconds);
 
-        let (mut cache, mut choices) = fetch_choices_with_cache(
-            &start_url,
-            sso_region.as_deref(),
-            self.options.ignore_cache,
-        )
-        .await?;
+        let (mut cache, mut choices) =
+            fetch_choices_with_cache(&start_url, sso_region.as_deref(), self.options.ignore_cache)
+                .await?;
 
         if !self.options.show_all {
             apply_account_filters(&mut choices, &identity);
@@ -153,8 +144,10 @@ impl App {
                         fresh
                     };
                     let profile_name = aws_config::profile_name_for(&choice);
-                    let config_path = aws_config::ensure_profile_region(&profile_name, &cache.region)?;
-                    let mut env = EnvVars::from_role_credentials(&creds, &profile_name, &cache.region);
+                    let config_path =
+                        aws_config::ensure_profile_region(&profile_name, &cache.region)?;
+                    let mut env =
+                        EnvVars::from_role_credentials(&creds, &profile_name, &cache.region);
                     env.config_file = Some(config_path.display().to_string());
                     if let Some(path) = env_file_path(&self.options) {
                         tracing::debug!(path = %path.display(), "writing env file");
@@ -180,7 +173,8 @@ fn write_env_file(path: &PathBuf, env: &EnvVars) -> Result<()> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).map_err(|err| Error::Config(err.to_string()))?;
     }
-    std::fs::write(path, env.to_export_lines()).map_err(|err| Error::Config(err.to_string()))
+    std::fs::write(path, env.to_export_lines())
+        .map_err(|err| Error::Config(err.to_string()))
         .map(|_| {
             tracing::trace!(path = %path.display(), "wrote env file");
         })
@@ -221,9 +215,7 @@ async fn fetch_choices_with_cache(
 ) -> Result<(crate::model::CacheEntry, Vec<RoleChoice>)> {
     let cache = cache_token(start_url, sso_region, ignore_cache).await?;
     let mut cached_fallback: Option<(Vec<RoleChoice>, std::time::Duration)> = None;
-    if !ignore_cache
-        && let Some((choices, age)) = roles_cache::load_cached_roles(start_url)?
-    {
+    if !ignore_cache && let Some((choices, age)) = roles_cache::load_cached_roles(start_url)? {
         eprintln!(
             "{}",
             ui::info(&format!(
@@ -314,9 +306,7 @@ async fn cache_token(
     sso_region: Option<&str>,
     ignore_cache: bool,
 ) -> Result<crate::model::CacheEntry> {
-    if !ignore_cache
-        && let Ok(entry) = sso_cache::load_valid_cache(start_url)
-    {
+    if !ignore_cache && let Ok(entry) = sso_cache::load_valid_cache(start_url) {
         return Ok(entry);
     }
     let region = sso_region.ok_or(Error::MissingRegion)?;
@@ -353,7 +343,10 @@ mod tests {
 
     #[test]
     fn guesses_account_name_from_url() {
-        assert_eq!(guess_account_name("https://docker.awsapps.com/start"), "docker");
+        assert_eq!(
+            guess_account_name("https://docker.awsapps.com/start"),
+            "docker"
+        );
         assert_eq!(guess_account_name("https://my-org.awsapps.com/"), "my-org");
     }
 
@@ -469,12 +462,7 @@ fn resolve_identity(
 
 fn apply_account_filters(choices: &mut Vec<RoleChoice>, identity: &SsoIdentity) {
     if !identity.ignore_roles.is_empty() {
-        choices.retain(|choice| {
-            !identity
-                .ignore_roles
-                .iter()
-                .any(|r| r == &choice.role_name)
-        });
+        choices.retain(|choice| !identity.ignore_roles.iter().any(|r| r == &choice.role_name));
     }
     if !identity.accounts.is_empty() {
         choices.retain_mut(|choice| {
@@ -491,11 +479,7 @@ fn apply_account_filters(choices: &mut Vec<RoleChoice>, identity: &SsoIdentity) 
                 {
                     choice.account_name = alias.clone();
                 }
-                if rule
-                    .ignored_roles
-                    .iter()
-                    .any(|r| r == &choice.role_name)
-                {
+                if rule.ignored_roles.iter().any(|r| r == &choice.role_name) {
                     return false;
                 }
             }
@@ -556,15 +540,14 @@ fn maybe_save_account(
 fn prompt_select_account(accounts: &[SsoIdentity]) -> Result<SsoIdentity> {
     eprintln!("Select SSO account:");
     for (idx, account) in accounts.iter().enumerate() {
-        eprintln!(
-            "  {}. {} ({})",
-            idx + 1,
-            account.name,
-            account.sso_region
-        );
+        eprintln!("  {}. {} ({})", idx + 1, account.name, account.sso_region);
     }
     let input = prompt_input("Enter choice: ")?;
-    let index = input.trim().parse::<usize>().ok().and_then(|v| v.checked_sub(1));
+    let index = input
+        .trim()
+        .parse::<usize>()
+        .ok()
+        .and_then(|v| v.checked_sub(1));
     if let Some(index) = index
         && let Some(account) = accounts.get(index)
     {
@@ -581,8 +564,12 @@ fn prompt_yes_no(prompt: &str) -> Result<bool> {
 fn prompt_input(prompt: &str) -> Result<String> {
     use std::io::{self, Write};
     let mut stdout = io::stdout();
-    stdout.write_all(prompt.as_bytes()).map_err(|err| Error::Config(err.to_string()))?;
-    stdout.flush().map_err(|err| Error::Config(err.to_string()))?;
+    stdout
+        .write_all(prompt.as_bytes())
+        .map_err(|err| Error::Config(err.to_string()))?;
+    stdout
+        .flush()
+        .map_err(|err| Error::Config(err.to_string()))?;
     let mut input = String::new();
     io::stdin()
         .read_line(&mut input)
@@ -601,7 +588,13 @@ fn guess_account_name(start_url: &str) -> String {
     let subdomain = host.split('.').next().unwrap_or_default();
     let name = subdomain
         .chars()
-        .map(|ch| if ch.is_ascii_alphanumeric() || ch == '-' { ch } else { '-' })
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() || ch == '-' {
+                ch
+            } else {
+                '-'
+            }
+        })
         .collect::<String>();
     name.trim_matches('-').to_string()
 }

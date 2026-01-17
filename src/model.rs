@@ -35,7 +35,10 @@ impl RoleChoice {
     }
 
     pub fn label(&self) -> String {
-        format!("{} ({}) — {}", self.account_name, self.account_id, self.role_name)
+        format!(
+            "{} ({}) — {}",
+            self.account_name, self.account_id, self.role_name
+        )
     }
 }
 
