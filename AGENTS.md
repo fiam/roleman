@@ -43,6 +43,7 @@
 - Hide account/role entries via the persisted list; manage it with the `--manage-hidden` TUI.
 - The selector TUI should be fzf-style (non-fullscreen) and not take over the terminal when possible.
 - Avoid writing to `~/.aws/config` or `~/.aws/credentials`; rely on env exports and device-authorization login when no cache is present.
+- When `AWS_PROFILE` is set, write a minimal profile section to a Roleman-managed config file under `$XDG_STATE_HOME/roleman/aws-config` (or `~/.local/state/roleman/aws-config`) and export `AWS_CONFIG_FILE` to point at it.
 - Reuse AWS SSO cache from `~/.aws/sso/cache`, but write refreshed tokens to the Roleman cache under `~/.cache/roleman` (or `$XDG_CACHE_HOME/roleman`).
 - Cache account/role listings for 24 hours in the Roleman cache to avoid unnecessary API calls (skip with `--no-cache`).
 - For long-running sessions, support periodic refresh of account/role lists via `refresh_seconds`.
