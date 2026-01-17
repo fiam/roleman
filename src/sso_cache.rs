@@ -2,11 +2,11 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use sha1::{Digest, Sha1};
 use crate::aws_sdk;
 use crate::error::{Error, Result};
 use crate::model::CacheEntry;
 use crate::ui;
+use sha1::{Digest, Sha1};
 use tracing::{debug, trace};
 
 #[derive(Debug, Clone)]
@@ -127,7 +127,10 @@ pub async fn device_authorization(start_url: &str, region: &str) -> Result<Cache
         .await
         {
             Ok(token) => {
-                eprintln!("{}", ui::success("Authorization complete, fetching access token..."));
+                eprintln!(
+                    "{}",
+                    ui::success("Authorization complete, fetching access token...")
+                );
                 let expires_at = SystemTime::now()
                     .checked_add(std::time::Duration::from_secs(token.expires_in))
                     .unwrap_or(SystemTime::now());
@@ -203,7 +206,10 @@ fn load_client_from_roleman_cache(region: &str) -> Result<Option<ClientRegistrat
         Ok(value) => value,
         Err(_) => return Ok(None),
     };
-    let cached_region = value.get("region").and_then(|v| v.as_str()).unwrap_or_default();
+    let cached_region = value
+        .get("region")
+        .and_then(|v| v.as_str())
+        .unwrap_or_default();
     if cached_region != region {
         return Ok(None);
     }
@@ -333,11 +339,11 @@ fn is_expired(expires_at: &str) -> Result<bool> {
 }
 
 fn aws_time_to_epoch(expires_at: &str) -> Result<u64> {
-    let parsed = time::OffsetDateTime::parse(
-        expires_at,
-        &time::format_description::well_known::Rfc3339,
-    )
-    .map_err(|_| Error::CacheParse { path: PathBuf::from(expires_at) })?;
+    let parsed =
+        time::OffsetDateTime::parse(expires_at, &time::format_description::well_known::Rfc3339)
+            .map_err(|_| Error::CacheParse {
+                path: PathBuf::from(expires_at),
+            })?;
     Ok(parsed.unix_timestamp() as u64)
 }
 
@@ -388,7 +394,8 @@ fn write_cache_entry(start_url: &str, entry: &CacheEntry) -> Result<()> {
         "accessToken": entry.access_token,
         "expiresAt": entry.expires_at,
     });
-    let data = serde_json::to_string(&value).map_err(|_| Error::CacheParse { path: path.clone() })?;
+    let data =
+        serde_json::to_string(&value).map_err(|_| Error::CacheParse { path: path.clone() })?;
     fs::write(&path, data).map_err(|_| Error::CacheParse { path })?;
     Ok(())
 }

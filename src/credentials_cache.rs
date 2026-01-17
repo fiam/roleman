@@ -71,19 +71,9 @@ pub fn save_cached_credentials(
     Ok(())
 }
 
-fn cache_path(
-    start_url: &str,
-    region: &str,
-    account_id: &str,
-    role_name: &str,
-) -> Result<PathBuf> {
+fn cache_path(start_url: &str, region: &str, account_id: &str, role_name: &str) -> Result<PathBuf> {
     let cache_dir = roleman_cache_dir()?;
-    Ok(cache_dir.join(cache_filename(
-        start_url,
-        region,
-        account_id,
-        role_name,
-    )))
+    Ok(cache_dir.join(cache_filename(start_url, region, account_id, role_name)))
 }
 
 fn cache_filename(start_url: &str, region: &str, account_id: &str, role_name: &str) -> String {

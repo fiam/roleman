@@ -33,7 +33,8 @@ impl Config {
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent).map_err(|err| Error::Config(err.to_string()))?;
         }
-        let contents = toml::to_string_pretty(self).map_err(|err| Error::Config(err.to_string()))?;
+        let contents =
+            toml::to_string_pretty(self).map_err(|err| Error::Config(err.to_string()))?;
         fs::write(path, contents).map_err(|err| Error::Config(err.to_string()))
     }
 }
@@ -86,13 +87,13 @@ mod tests {
                 name: "work".into(),
                 start_url: "https://example.awsapps.com/start".into(),
                 sso_region: "us-east-1".into(),
-            accounts: vec![AccountRule {
-                account_id: "1234".into(),
-                alias: Some("Main".into()),
-                ignored: false,
-                ignored_roles: vec!["Admin".into()],
-                precedence: Some(10),
-            }],
+                accounts: vec![AccountRule {
+                    account_id: "1234".into(),
+                    alias: Some("Main".into()),
+                    ignored: false,
+                    ignored_roles: vec!["Admin".into()],
+                    precedence: Some(10),
+                }],
                 ignore_roles: vec!["ReadOnly".into()],
             }],
             default_identity: Some("work".into()),

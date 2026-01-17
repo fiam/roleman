@@ -84,10 +84,7 @@ fn run_skim(options: &SkimOptions, choices: &[RoleChoice]) -> Result<(Vec<RoleCh
             if out.is_abort {
                 (Vec::new(), false)
             } else {
-                (
-                    out.selected_items,
-                    matches!(out.final_key, Key::Ctrl('o')),
-                )
+                (out.selected_items, matches!(out.final_key, Key::Ctrl('o')))
             }
         }
         None => {
@@ -97,8 +94,7 @@ fn run_skim(options: &SkimOptions, choices: &[RoleChoice]) -> Result<(Vec<RoleCh
     };
     debug!(
         count = selected.len(),
-        open_in_browser,
-        "skim selection complete"
+        open_in_browser, "skim selection complete"
     );
 
     let mut result = Vec::new();
