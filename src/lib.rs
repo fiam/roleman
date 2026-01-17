@@ -9,7 +9,7 @@ mod tui;
 
 pub use crate::error::{Error, Result};
 use crate::model::{EnvVars, RoleChoice};
-use crate::config::{Config, SsoAccount};
+use crate::config::{Config, SsoIdentity};
 use std::path::{Path, PathBuf};
 use futures::StreamExt;
 use tracing::debug;
@@ -28,6 +28,7 @@ pub struct AppOptions {
     pub env_file: Option<PathBuf>,
     pub print_env: bool,
     pub account: Option<String>,
+    pub show_all: bool,
 }
 
 
@@ -39,22 +40,27 @@ impl App {
     pub async fn run(&self) -> Result<()> {
         let (mut config, config_path) = Config::load(self.options.config_path.as_deref())?;
         let config_exists = config_path.exists();
-        let account = resolve_account(
+        let identity = resolve_identity(
             &self.options,
             &mut config,
             &config_path,
             config_exists,
         )?;
-        let start_url = account.start_url;
-        let sso_region = Some(account.sso_region);
+        let start_url = identity.start_url.clone();
+        let sso_region = Some(identity.sso_region.clone());
         let refresh_seconds = self.options.refresh_seconds.or(config.refresh_seconds);
 
-        let (mut cache, choices) = fetch_choices_with_cache(
+        let (mut cache, mut choices) = fetch_choices_with_cache(
             &start_url,
             sso_region.as_deref(),
             self.options.ignore_cache,
         )
         .await?;
+
+        if !self.options.show_all {
+            apply_account_filters(&mut choices, &identity);
+        }
+        sort_choices(&mut choices, &identity);
 
         let mut visible = choices;
         if visible.is_empty()
@@ -70,6 +76,10 @@ impl App {
                 .await?;
                 cache = refreshed_cache;
                 visible = refreshed;
+                if !self.options.show_all {
+                    apply_account_filters(&mut visible, &identity);
+                }
+                sort_choices(&mut visible, &identity);
                 if !visible.is_empty() {
                     break;
                 }
@@ -161,7 +171,7 @@ async fn fetch_choices_with_cache(
 
     let mut choices = Vec::new();
     eprintln!("Fetching SSO accounts...");
-    let accounts = match aws_sdk::list_accounts(&cache.access_token, &cache.region).await {
+    let mut accounts = match aws_sdk::list_accounts(&cache.access_token, &cache.region).await {
         Ok(accounts) => accounts,
         Err(err) => {
             if let Some((choices, age)) = cached_fallback {
@@ -174,6 +184,7 @@ async fn fetch_choices_with_cache(
             return Err(err);
         }
     };
+    accounts.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
     for account in &accounts {
         debug!(account_id = %account.id, account_name = %account.name, "fetched account");
     }
@@ -257,75 +268,197 @@ mod tests {
         assert!(contents.contains("AWS_ACCESS_KEY_ID=AKIA123"));
         assert!(contents.contains("AWS_PROFILE=Docker-Cloud/ReadOnly"));
     }
+
+    #[test]
+    fn guesses_account_name_from_url() {
+        assert_eq!(guess_account_name("https://docker.awsapps.com/start"), "docker");
+        assert_eq!(guess_account_name("https://my-org.awsapps.com/"), "my-org");
+    }
+
+    #[test]
+    fn sorts_choices_by_precedence_then_name() {
+        let identity = SsoIdentity {
+            name: "docker".into(),
+            start_url: "https://docker.awsapps.com/start".into(),
+            sso_region: "us-east-1".into(),
+            accounts: vec![
+                config::AccountRule {
+                    account_id: "2222".into(),
+                    alias: None,
+                    ignored: false,
+                    ignored_roles: Vec::new(),
+                    precedence: Some(5),
+                },
+                config::AccountRule {
+                    account_id: "1111".into(),
+                    alias: None,
+                    ignored: false,
+                    ignored_roles: Vec::new(),
+                    precedence: None,
+                },
+            ],
+            ignore_roles: Vec::new(),
+        };
+
+        let mut choices = vec![
+            RoleChoice {
+                account_id: "1111".into(),
+                account_name: "Zulu".into(),
+                role_name: "ReadOnly".into(),
+            },
+            RoleChoice {
+                account_id: "2222".into(),
+                account_name: "Alpha".into(),
+                role_name: "Admin".into(),
+            },
+            RoleChoice {
+                account_id: "1111".into(),
+                account_name: "Zulu".into(),
+                role_name: "Admin".into(),
+            },
+        ];
+
+        sort_choices(&mut choices, &identity);
+
+        assert_eq!(choices[0].account_id, "2222");
+        assert_eq!(choices[0].role_name, "Admin");
+        assert_eq!(choices[1].role_name, "Admin");
+        assert_eq!(choices[2].role_name, "ReadOnly");
+    }
 }
 
-fn resolve_account(
+fn resolve_identity(
     options: &AppOptions,
     config: &mut Config,
     config_path: &Path,
     config_exists: bool,
-) -> Result<SsoAccount> {
+) -> Result<SsoIdentity> {
     if let Some(name) = options.account.as_deref() {
         return config
-            .accounts
+            .identities
             .iter()
-            .find(|account| account.name == name)
+            .find(|identity| identity.name == name)
             .cloned()
             .ok_or(Error::MissingAccount);
     }
 
     if let Some(start_url) = options.start_url.clone() {
         let region = options.sso_region.clone().ok_or(Error::MissingRegion)?;
-        let account = SsoAccount {
+        let identity = SsoIdentity {
             name: "manual".to_string(),
             start_url,
             sso_region: region,
+            accounts: Vec::new(),
+            ignore_roles: Vec::new(),
         };
-        if !config_exists && config.accounts.is_empty() {
-            maybe_save_account(config, config_path, &account)?;
+        if !config_exists && config.identities.is_empty() {
+            maybe_save_account(config, config_path, &identity)?;
         }
-        return Ok(account);
+        return Ok(identity);
     }
 
-    if let Some(default_name) = config.default_account.as_deref()
-        && let Some(account) = config.accounts.iter().find(|a| a.name == default_name)
+    if let Some(default_name) = config.default_identity.as_deref()
+        && let Some(identity) = config.identities.iter().find(|a| a.name == default_name)
     {
-        return Ok(account.clone());
+        return Ok(identity.clone());
     }
-    if config.accounts.len() == 1 {
-        return Ok(config.accounts[0].clone());
+    if config.identities.len() == 1 {
+        return Ok(config.identities[0].clone());
     }
-    if config.accounts.is_empty() {
+    if config.identities.is_empty() {
         return Err(Error::MissingAccount);
     }
 
-    prompt_select_account(&config.accounts)
+    prompt_select_account(&config.identities)
+}
+
+fn apply_account_filters(choices: &mut Vec<RoleChoice>, identity: &SsoIdentity) {
+    if !identity.ignore_roles.is_empty() {
+        choices.retain(|choice| {
+            !identity
+                .ignore_roles
+                .iter()
+                .any(|r| r == &choice.role_name)
+        });
+    }
+    if !identity.accounts.is_empty() {
+        choices.retain_mut(|choice| {
+            if let Some(rule) = identity
+                .accounts
+                .iter()
+                .find(|rule| rule.account_id == choice.account_id)
+            {
+                if rule.ignored {
+                    return false;
+                }
+                if let Some(alias) = &rule.alias
+                    && !alias.trim().is_empty()
+                {
+                    choice.account_name = alias.clone();
+                }
+                if rule
+                    .ignored_roles
+                    .iter()
+                    .any(|r| r == &choice.role_name)
+                {
+                    return false;
+                }
+            }
+            true
+        });
+    }
+}
+
+fn sort_choices(choices: &mut [RoleChoice], identity: &SsoIdentity) {
+    let mut precedence = std::collections::HashMap::new();
+    for rule in &identity.accounts {
+        if let Some(value) = rule.precedence {
+            precedence.insert(rule.account_id.clone(), value);
+        }
+    }
+    choices.sort_by_key(|choice| {
+        let priority = precedence.get(&choice.account_id).copied().unwrap_or(0);
+        (
+            std::cmp::Reverse(priority),
+            choice.account_name.to_lowercase(),
+            choice.role_name.to_lowercase(),
+        )
+    });
 }
 
 fn maybe_save_account(
     config: &mut Config,
     config_path: &Path,
-    account: &SsoAccount,
+    account: &SsoIdentity,
 ) -> Result<()> {
     if !prompt_yes_no("No config found. Save this SSO account as default? [y/N] ")? {
         return Ok(());
     }
-    let name = prompt_input("Account name: ")?;
-    if name.trim().is_empty() {
+    let suggested = guess_account_name(&account.start_url);
+    let prompt = format!("Account name [{}]: ", suggested);
+    let name = prompt_input(&prompt)?;
+    let final_name = if name.trim().is_empty() {
+        suggested
+    } else {
+        name.trim().to_string()
+    };
+    if final_name.is_empty() {
         return Ok(());
     }
-    let account = SsoAccount {
-        name: name.trim().to_string(),
+    let account = SsoIdentity {
+        name: final_name,
         start_url: account.start_url.clone(),
         sso_region: account.sso_region.clone(),
+        accounts: Vec::new(),
+        ignore_roles: Vec::new(),
     };
-    config.default_account = Some(account.name.clone());
-    config.accounts.push(account);
+    config.default_identity = Some(account.name.clone());
+    config.identities.push(account);
     config.save(config_path)?;
     Ok(())
 }
 
-fn prompt_select_account(accounts: &[SsoAccount]) -> Result<SsoAccount> {
+fn prompt_select_account(accounts: &[SsoIdentity]) -> Result<SsoIdentity> {
     eprintln!("Select SSO account:");
     for (idx, account) in accounts.iter().enumerate() {
         eprintln!(
@@ -360,4 +493,20 @@ fn prompt_input(prompt: &str) -> Result<String> {
         .read_line(&mut input)
         .map_err(|err| Error::Config(err.to_string()))?;
     Ok(input)
+}
+
+fn guess_account_name(start_url: &str) -> String {
+    let host = start_url
+        .trim()
+        .trim_start_matches("https://")
+        .trim_start_matches("http://")
+        .split('/')
+        .next()
+        .unwrap_or_default();
+    let subdomain = host.split('.').next().unwrap_or_default();
+    let name = subdomain
+        .chars()
+        .map(|ch| if ch.is_ascii_alphanumeric() || ch == '-' { ch } else { '-' })
+        .collect::<String>();
+    name.trim_matches('-').to_string()
 }
