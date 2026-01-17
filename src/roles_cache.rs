@@ -33,9 +33,7 @@ pub fn load_cached_roles(start_url: &str) -> Result<Option<(Vec<RoleChoice>, Dur
     Ok(None)
 }
 
-pub fn load_cached_roles_with_age(
-    start_url: &str,
-) -> Result<Option<(Vec<RoleChoice>, Duration)>> {
+pub fn load_cached_roles_with_age(start_url: &str) -> Result<Option<(Vec<RoleChoice>, Duration)>> {
     let cache_dir = roleman_cache_dir()?;
     let path = cache_dir.join(cache_filename(start_url));
     if !path.exists() {

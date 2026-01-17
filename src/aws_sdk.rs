@@ -3,8 +3,8 @@ use aws_sdk_sso::types::{AccountInfo, RoleInfo};
 use aws_smithy_runtime_api::client::result::SdkError as SmithySdkError;
 use aws_smithy_runtime_api::http::Response as SmithyResponse;
 use aws_smithy_types::error::metadata::ProvideErrorMetadata;
-use aws_types::request_id::RequestId;
 use aws_types::SdkConfig;
+use aws_types::request_id::RequestId;
 
 use crate::error::{Error, Result};
 use crate::model::{
@@ -166,9 +166,7 @@ pub async fn list_account_roles(
 async fn retry_sdk<F, Fut, T, E>(mut call: F, max_attempts: usize) -> Result<T>
 where
     F: FnMut() -> Fut,
-    Fut: std::future::Future<
-        Output = std::result::Result<T, SmithySdkError<E, SmithyResponse>>,
-    >,
+    Fut: std::future::Future<Output = std::result::Result<T, SmithySdkError<E, SmithyResponse>>>,
     E: ProvideErrorMetadata + std::fmt::Debug + std::fmt::Display,
 {
     let mut attempt = 1;
@@ -181,11 +179,7 @@ where
                     return Err(Error::AwsSdk(message));
                 }
                 let backoff_ms = 500_u64.saturating_mul(2_u64.pow((attempt - 1) as u32));
-                tracing::debug!(
-                    attempt,
-                    backoff_ms,
-                    "throttled by aws sdk, backing off"
-                );
+                tracing::debug!(attempt, backoff_ms, "throttled by aws sdk, backing off");
                 tokio::time::sleep(std::time::Duration::from_millis(backoff_ms)).await;
                 attempt += 1;
             }
@@ -195,7 +189,10 @@ where
 
 fn is_throttle_error(code: Option<&str>, message: &str) -> bool {
     if let Some(code) = code
-        && matches!(code, "TooManyRequestsException" | "ThrottlingException" | "Throttling")
+        && matches!(
+            code,
+            "TooManyRequestsException" | "ThrottlingException" | "Throttling"
+        )
     {
         return true;
     }

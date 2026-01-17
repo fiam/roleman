@@ -95,6 +95,10 @@ fn roleman_aws_config_path() -> Result<PathBuf> {
         Ok(PathBuf::from(dir).join("roleman").join("aws-config"))
     } else {
         let home = std::env::var("HOME").map_err(|_| Error::MissingHome)?;
-        Ok(Path::new(&home).join(".local").join("state").join("roleman").join("aws-config"))
+        Ok(Path::new(&home)
+            .join(".local")
+            .join("state")
+            .join("roleman")
+            .join("aws-config"))
     }
 }
