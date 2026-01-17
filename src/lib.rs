@@ -99,13 +99,20 @@ impl App {
             AppAction::Open => "roleman open> ",
         };
         let selected = tui::select_role(prompt, &visible)?;
-        if let Some(choice) = selected {
+        if let Some(selection) = selected {
+            let choice = selection.choice;
             tracing::debug!(
                 account_id = %choice.account_id,
                 account_name = %choice.account_name,
                 role_name = %choice.role_name,
                 "selected role"
             );
+            if matches!(self.options.action, AppAction::Set) && selection.open_in_browser {
+                let url = console_url(&start_url, &choice.account_id, &choice.role_name);
+                eprintln!("Opening {url}");
+                open_in_browser(&url)?;
+                return Ok(());
+            }
             match self.options.action {
                 AppAction::Set => {
                     tracing::debug!("fetching role credentials");
