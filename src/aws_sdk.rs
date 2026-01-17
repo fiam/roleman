@@ -1,5 +1,9 @@
 use aws_config::Region;
 use aws_sdk_sso::types::{AccountInfo, RoleInfo};
+use aws_smithy_runtime_api::client::result::SdkError as SmithySdkError;
+use aws_smithy_runtime_api::http::Response as SmithyResponse;
+use aws_smithy_types::error::metadata::ProvideErrorMetadata;
+use aws_types::request_id::RequestId;
 use aws_types::SdkConfig;
 
 use crate::error::{Error, Result};
@@ -25,7 +29,7 @@ pub async fn register_client(region: &str) -> Result<AwsRegisterClient> {
         .client_type("public")
         .send()
         .await
-        .map_err(|err| Error::AwsSdk(err.to_string()))?;
+        .map_err(|err| Error::AwsSdk(format_sdk_error(&err)))?;
 
     Ok(AwsRegisterClient {
         client_id: output
@@ -54,7 +58,7 @@ pub async fn start_device_authorization(
         .start_url(start_url)
         .send()
         .await
-        .map_err(|err| Error::AwsSdk(err.to_string()))?;
+        .map_err(|err| Error::AwsSdk(format_sdk_error(&err)))?;
 
     Ok(AwsStartDeviceAuthorization {
         device_code: output
@@ -90,7 +94,7 @@ pub async fn create_token(
         .grant_type("urn:ietf:params:oauth:grant-type:device_code")
         .send()
         .await
-        .map_err(|err| Error::AwsSdk(err.to_string()))?;
+        .map_err(|err| Error::AwsSdk(format_sdk_error(&err)))?;
 
     Ok(AwsCreateToken {
         access_token: output
@@ -112,10 +116,8 @@ pub async fn list_accounts(access_token: &str, region: &str) -> Result<Vec<Accou
         if let Some(token) = next_token.as_deref() {
             request = request.next_token(token);
         }
-        let output = request
-            .send()
-            .await
-            .map_err(|err| Error::AwsSdk(err.to_string()))?;
+        let output: aws_sdk_sso::operation::list_accounts::ListAccountsOutput =
+            retry_sdk(|| request.clone().send(), 5).await?;
 
         accounts.extend(output.account_list().iter().filter_map(account_from_sdk));
 
@@ -146,10 +148,8 @@ pub async fn list_account_roles(
         if let Some(token) = next_token.as_deref() {
             request = request.next_token(token);
         }
-        let output = request
-            .send()
-            .await
-            .map_err(|err| Error::AwsSdk(err.to_string()))?;
+        let output: aws_sdk_sso::operation::list_account_roles::ListAccountRolesOutput =
+            retry_sdk(|| request.clone().send(), 5).await?;
 
         roles.extend(output.role_list().iter().filter_map(role_from_sdk));
 
@@ -160,6 +160,48 @@ pub async fn list_account_roles(
     }
 
     Ok(roles)
+}
+
+async fn retry_sdk<F, Fut, T, E>(mut call: F, max_attempts: usize) -> Result<T>
+where
+    F: FnMut() -> Fut,
+    Fut: std::future::Future<
+        Output = std::result::Result<T, SmithySdkError<E, SmithyResponse>>,
+    >,
+    E: ProvideErrorMetadata + std::fmt::Debug + std::fmt::Display,
+{
+    let mut attempt = 1;
+    loop {
+        match call().await {
+            Ok(output) => return Ok(output),
+            Err(err) => {
+                let message = format_sdk_error(&err);
+                if attempt >= max_attempts || !is_throttle_error(err.meta().code(), &message) {
+                    return Err(Error::AwsSdk(message));
+                }
+                let backoff_ms = 500_u64.saturating_mul(2_u64.pow((attempt - 1) as u32));
+                tracing::debug!(
+                    attempt,
+                    backoff_ms,
+                    "throttled by aws sdk, backing off"
+                );
+                tokio::time::sleep(std::time::Duration::from_millis(backoff_ms)).await;
+                attempt += 1;
+            }
+        }
+    }
+}
+
+fn is_throttle_error(code: Option<&str>, message: &str) -> bool {
+    if let Some(code) = code
+        && matches!(code, "TooManyRequestsException" | "ThrottlingException" | "Throttling")
+    {
+        return true;
+    }
+    message.contains("TooManyRequests")
+        || message.contains("TooManyRequestsException")
+        || message.contains("Throttling")
+        || message.contains("Rate exceeded")
 }
 
 pub async fn get_role_credentials(
@@ -177,7 +219,7 @@ pub async fn get_role_credentials(
         .role_name(role_name)
         .send()
         .await
-        .map_err(|err| Error::AwsSdk(err.to_string()))?;
+        .map_err(|err| Error::AwsSdk(format_sdk_error(&err)))?;
 
     let creds = output
         .role_credentials()
@@ -211,4 +253,27 @@ fn role_from_sdk(role: &RoleInfo) -> Option<Role> {
     Some(Role {
         name: role.role_name()?.to_string(),
     })
+}
+
+fn format_sdk_error<E>(err: &E) -> String
+where
+    E: ProvideErrorMetadata + std::fmt::Display + std::fmt::Debug,
+{
+    let mut parts = Vec::new();
+    let mut base = err.to_string();
+    if base == "service error" {
+        base = format!("{err:?}");
+    }
+    parts.push(base);
+    let meta = err.meta();
+    if let Some(code) = meta.code() {
+        parts.push(format!("code={code}"));
+    }
+    if let Some(message) = meta.message() {
+        parts.push(format!("message={message}"));
+    }
+    if let Some(request_id) = meta.request_id() {
+        parts.push(format!("request_id={request_id}"));
+    }
+    parts.join(" | ")
 }

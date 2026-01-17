@@ -17,6 +17,8 @@ aws-config = "1"
 aws-sdk-sso = "1"
 aws-sdk-ssooidc = "1"
 aws-types = "1"
+aws-smithy-types = "1"
+aws-smithy-runtime-api = "1"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "time"] }
 futures = "0.3"
 

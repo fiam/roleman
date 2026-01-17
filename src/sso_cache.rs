@@ -22,7 +22,12 @@ pub fn load_valid_cache(start_url: &str) -> Result<CacheEntry> {
     }
 
     if let Some(entry) = best.clone() {
+        let remaining = time_until_expiry(&entry.expires_at).unwrap_or_default();
         debug!(expires_at = %entry.expires_at, "using cached sso token");
+        eprintln!(
+            "Using cached SSO token (valid for {}).",
+            format_duration(remaining)
+        );
         return Ok(entry);
     }
     Err(Error::MissingCache)
@@ -179,6 +184,32 @@ fn aws_time_to_epoch(expires_at: &str) -> Result<u64> {
     Ok(parsed.unix_timestamp() as u64)
 }
 
+fn time_until_expiry(expires_at: &str) -> Result<std::time::Duration> {
+    let expires_epoch = aws_time_to_epoch(expires_at)?;
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    if expires_epoch <= now {
+        return Ok(std::time::Duration::from_secs(0));
+    }
+    Ok(std::time::Duration::from_secs(expires_epoch - now))
+}
+
+fn format_duration(duration: std::time::Duration) -> String {
+    let total = duration.as_secs();
+    let hours = total / 3600;
+    let minutes = (total % 3600) / 60;
+    let seconds = total % 60;
+    if hours > 0 {
+        format!("{hours}h {minutes}m")
+    } else if minutes > 0 {
+        format!("{minutes}m {seconds}s")
+    } else {
+        format!("{seconds}s")
+    }
+}
+
 fn is_pending_auth(error: &Error) -> bool {
     match error {
         Error::AwsSdk(message) => {
@@ -213,28 +244,18 @@ fn cache_filename(start_url: &str) -> String {
 }
 
 fn open_browser(url: &str) -> std::io::Result<()> {
-    #[cfg(target_os = "macos")]
-    {
+    if cfg!(target_os = "macos") {
         std::process::Command::new("open").arg(url).status()?;
-        return Ok(());
-    }
-    #[cfg(target_os = "linux")]
-    {
+    } else if cfg!(target_os = "linux") {
         std::process::Command::new("xdg-open").arg(url).status()?;
-        return Ok(());
-    }
-    #[cfg(target_os = "windows")]
-    {
+    } else if cfg!(target_os = "windows") {
         std::process::Command::new("cmd")
             .args(["/C", "start", "", url])
             .status()?;
-        return Ok(());
-    }
-    #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
-    {
+    } else {
         let _ = url;
-        return Ok(());
     }
+    Ok(())
 }
 
 #[cfg(test)]
