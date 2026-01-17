@@ -13,6 +13,7 @@
 - `cargo build --release` — produce an optimized release binary.
 - `cargo test` — run all unit and integration tests.
 - `cargo run -- --no-cache` — force SSO sign-in instead of using cached tokens.
+- `cargo run -- --show-all` — ignore any account/role filters configured for the selected account.
 - `cargo run -- hook zsh` — print the zsh hook snippet for env updates.
 - `ROLEMAN_LOG_FILE=/tmp/roleman.log RUST_LOG=roleman=trace cargo run -- ...` — log trace output to a file to avoid TUI clearing logs.
 - `cargo run -- --print` — print env exports to stdout (default is hook-only).
@@ -38,8 +39,9 @@
 
 ## Configuration & UX Notes
 - The tool accepts an SSO start URL via CLI args or via `~/.config/roleman/config.toml`.
-- Config keys: `accounts` (list of `{ name, start_url, sso_region }`), `default_account`, and `refresh_seconds`.
-- Use `--account <name>` to select a non-default account when multiple are configured.
+- Config keys: `identities` (list of `{ name, start_url, sso_region, accounts, ignore_roles }`), `default_identity`, and `refresh_seconds`.
+- Each `accounts` entry supports `{ account_id, alias, ignored, ignored_roles, precedence }` where higher precedence appears first.
+- Use `--account <name>` to select a non-default identity when multiple are configured.
 - The selector TUI should be fzf-style (non-fullscreen) and not take over the terminal when possible.
 - Avoid writing to `~/.aws/config` or `~/.aws/credentials`; rely on env exports and device-authorization login when no cache is present.
 - When `AWS_PROFILE` is set, write a minimal profile section to a Roleman-managed config file under `$XDG_STATE_HOME/roleman/aws-config` (or `~/.local/state/roleman/aws-config`) and export `AWS_CONFIG_FILE` to point at it.

@@ -25,15 +25,13 @@ fn main() {
         None
     };
 
-    let mut args_vec = std::env::args().collect::<Vec<_>>();
-    let subcommand = args_vec.get(1).map(|v| v.as_str());
+    let args_vec = std::env::args().skip(1).collect::<Vec<_>>();
+    let subcommand = args_vec.first().map(|v| v.as_str());
     let is_hook = matches!(subcommand, Some("hook"));
     let is_unset = matches!(subcommand, Some("unset") | Some("u"));
     let is_set = matches!(subcommand, Some("set") | Some("s"));
-    let mut args = args_vec.drain(1..);
     if is_hook {
-        let _ = args.next();
-        let shell = args.next().unwrap_or_default();
+        let shell = args_vec.get(1).cloned().unwrap_or_default();
         if shell == "zsh" {
             print_zsh_hook();
             return;
@@ -45,39 +43,49 @@ fn main() {
         handle_unset();
         return;
     }
-    if is_set {
-        let _ = args.next();
-    }
 
     let mut options = AppOptions::default();
-    while let Some(arg) = args.next() {
+    let mut index = if is_set { 1 } else { 0 };
+    if is_set
+        && let Some(value) = args_vec.get(1)
+        && !value.starts_with('-')
+    {
+        options.account = Some(value.clone());
+        index = 2;
+    }
+    while index < args_vec.len() {
+        let arg = &args_vec[index];
         match arg.as_str() {
             "--sso-start-url" => {
-                options.start_url = args.next();
+                index += 1;
+                options.start_url = args_vec.get(index).cloned();
                 if options.start_url.is_none() {
                     exit_usage("missing value for --sso-start-url");
                 }
             }
-            "--manage-hidden" => {
-                exit_usage("--manage-hidden is no longer supported");
-            }
             "--no-cache" => {
                 options.ignore_cache = true;
             }
+            "--show-all" => {
+                options.show_all = true;
+            }
             "--sso-region" => {
-                options.sso_region = args.next();
+                index += 1;
+                options.sso_region = args_vec.get(index).cloned();
                 if options.sso_region.is_none() {
                     exit_usage("missing value for --sso-region");
                 }
             }
             "-a" | "--account" => {
-                options.account = args.next();
+                index += 1;
+                options.account = args_vec.get(index).cloned();
                 if options.account.is_none() {
                     exit_usage("missing value for --account");
                 }
             }
             "--refresh-seconds" => {
-                let value = args.next().unwrap_or_default();
+                index += 1;
+                let value = args_vec.get(index).cloned().unwrap_or_default();
                 let parsed = value.parse::<u64>().ok();
                 if parsed.is_none() {
                     exit_usage("invalid value for --refresh-seconds");
@@ -85,7 +93,8 @@ fn main() {
                 options.refresh_seconds = parsed;
             }
             "--env-file" => {
-                let value = args.next().unwrap_or_default();
+                index += 1;
+                let value = args_vec.get(index).cloned().unwrap_or_default();
                 if value.is_empty() {
                     exit_usage("missing value for --env-file");
                 }
@@ -95,7 +104,8 @@ fn main() {
                 options.print_env = true;
             }
             "--config" => {
-                let value = args.next().unwrap_or_default();
+                index += 1;
+                let value = args_vec.get(index).cloned().unwrap_or_default();
                 if value.is_empty() {
                     exit_usage("missing value for --config");
                 }
@@ -107,12 +117,13 @@ fn main() {
             }
             _ => {
                 if options.start_url.is_none() {
-                    options.start_url = Some(arg);
+                    options.start_url = Some(arg.to_string());
                 } else {
                     exit_usage("unexpected argument");
                 }
             }
         }
+        index += 1;
     }
 
     let runtime = tokio::runtime::Runtime::new().expect("failed to start runtime");
@@ -127,7 +138,7 @@ fn main() {
 
 fn print_usage() {
     eprintln!(
-        "usage: roleman [--sso-start-url <url>] [--sso-region <region>] [--account <name>] [--no-cache] [--refresh-seconds <n>] [--env-file <path>] [--print] [--config <path>]\n       roleman set|s [options]\n       roleman <sso-start-url>\n       roleman hook zsh\n       roleman unset|u"
+        "usage: roleman [--sso-start-url <url>] [--sso-region <region>] [--account <name>] [--no-cache] [--show-all] [--refresh-seconds <n>] [--env-file <path>] [--print] [--config <path>]\n       roleman set|s [--account <name>]\n       roleman <sso-start-url>\n       roleman hook zsh\n       roleman unset|u"
     );
 }
 

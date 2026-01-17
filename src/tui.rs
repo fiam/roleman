@@ -22,15 +22,21 @@ pub fn select_role(choices: &[RoleChoice]) -> Result<Option<RoleChoice>> {
         return Ok(None);
     }
 
-    debug!(count = choices.len(), "starting role selection");
+    let mut ordered = choices.to_vec();
+    ordered.reverse();
+    debug!(count = ordered.len(), "starting role selection");
     let options = SkimOptionsBuilder::default()
         .height(Some("50%"))
         .multi(false)
         .prompt(Some("roleman> "))
+        .layout("default")
+        .tac(false)
+        .reverse(false)
+        .nosort(true)
         .build()
         .map_err(|err| Error::Tui(err.to_string()))?;
 
-    let selected = run_skim(&options, choices)?;
+    let selected = run_skim(&options, &ordered)?;
 
     if selected.is_empty() {
         debug!("no role selected");
