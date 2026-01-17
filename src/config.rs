@@ -8,8 +8,8 @@ use crate::error::{Error, Result};
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct Config {
     #[serde(default)]
-    pub accounts: Vec<SsoAccount>,
-    pub default_account: Option<String>,
+    pub identities: Vec<SsoIdentity>,
+    pub default_identity: Option<String>,
     pub refresh_seconds: Option<u64>,
 }
 
@@ -39,10 +39,26 @@ impl Config {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct SsoAccount {
+pub struct SsoIdentity {
     pub name: String,
     pub start_url: String,
     pub sso_region: String,
+    #[serde(default)]
+    pub accounts: Vec<AccountRule>,
+    #[serde(default)]
+    pub ignore_roles: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AccountRule {
+    pub account_id: String,
+    pub alias: Option<String>,
+    #[serde(default)]
+    pub ignored: bool,
+    #[serde(default)]
+    pub ignored_roles: Vec<String>,
+    #[serde(default)]
+    pub precedence: Option<i32>,
 }
 
 fn default_config_path() -> Result<PathBuf> {
@@ -66,19 +82,27 @@ mod tests {
         let temp = TempDir::new().unwrap();
         let path = temp.path().join("config.toml");
         let config = Config {
-            accounts: vec![SsoAccount {
+            identities: vec![SsoIdentity {
                 name: "work".into(),
                 start_url: "https://example.awsapps.com/start".into(),
                 sso_region: "us-east-1".into(),
+            accounts: vec![AccountRule {
+                account_id: "1234".into(),
+                alias: Some("Main".into()),
+                ignored: false,
+                ignored_roles: vec!["Admin".into()],
+                precedence: Some(10),
             }],
-            default_account: Some("work".into()),
+                ignore_roles: vec!["ReadOnly".into()],
+            }],
+            default_identity: Some("work".into()),
             refresh_seconds: Some(120),
         };
 
         config.save(&path).unwrap();
         let (loaded, _) = Config::load(Some(&path)).unwrap();
-        assert_eq!(loaded.accounts, config.accounts);
-        assert_eq!(loaded.default_account, config.default_account);
+        assert_eq!(loaded.identities, config.identities);
+        assert_eq!(loaded.default_identity, config.default_identity);
         assert_eq!(loaded.refresh_seconds, config.refresh_seconds);
     }
 
@@ -92,7 +116,7 @@ mod tests {
         }
 
         let (config, path) = Config::load(None).unwrap();
-        assert!(config.accounts.is_empty());
+        assert!(config.identities.is_empty());
         assert_eq!(path, temp.path().join("roleman").join("config.toml"));
 
         unsafe {
