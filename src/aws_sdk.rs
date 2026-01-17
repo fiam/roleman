@@ -40,6 +40,7 @@ pub async fn register_client(region: &str) -> Result<AwsRegisterClient> {
             .client_secret()
             .ok_or_else(|| Error::AwsSdk("missing client_secret".into()))?
             .to_string(),
+        client_secret_expires_at: output.client_secret_expires_at(),
     })
 }
 

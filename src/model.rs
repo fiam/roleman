@@ -57,6 +57,8 @@ pub struct AwsRegisterClient {
     pub client_id: String,
     #[serde(rename = "clientSecret")]
     pub client_secret: String,
+    #[serde(rename = "clientSecretExpiresAt")]
+    pub client_secret_expires_at: i64,
 }
 
 #[derive(Debug, Deserialize)]
