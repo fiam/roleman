@@ -2,21 +2,14 @@ use std::borrow::Cow;
 use std::sync::Arc;
 
 use skim::prelude::*;
+use tracing::{debug, trace};
 
 use crate::config::HiddenRole;
 use crate::error::{Error, Result};
 use crate::model::RoleChoice;
 
 struct ChoiceItem {
-    choice: RoleChoice,
     label: String,
-}
-
-impl ChoiceItem {
-    fn new(choice: RoleChoice) -> Self {
-        let label = choice.label();
-        Self { choice, label }
-    }
 }
 
 impl SkimItem for ChoiceItem {
@@ -30,6 +23,7 @@ pub fn select_role(choices: &[RoleChoice]) -> Result<Option<RoleChoice>> {
         return Ok(None);
     }
 
+    debug!(count = choices.len(), "starting role selection");
     let options = SkimOptionsBuilder::default()
         .height(Some("50%"))
         .multi(false)
@@ -40,6 +34,7 @@ pub fn select_role(choices: &[RoleChoice]) -> Result<Option<RoleChoice>> {
     let selected = run_skim(&options, choices)?;
 
     if selected.is_empty() {
+        debug!("no role selected");
         return Ok(None);
     }
 
@@ -95,10 +90,15 @@ pub fn manage_hidden(
 }
 
 fn run_skim(options: &SkimOptions, choices: &[RoleChoice]) -> Result<Vec<RoleChoice>> {
+    trace!(count = choices.len(), "preparing skim items");
+    let mut lookup = std::collections::HashMap::new();
     let items = choices
         .iter()
-        .cloned()
-        .map(ChoiceItem::new)
+        .map(|choice| {
+            let label = choice.label();
+            lookup.insert(label.clone(), choice.clone());
+            ChoiceItem { label }
+        })
         .map(|item| Arc::new(item) as Arc<dyn SkimItem>)
         .collect::<Vec<_>>();
 
@@ -110,14 +110,25 @@ fn run_skim(options: &SkimOptions, choices: &[RoleChoice]) -> Result<Vec<RoleCho
     }
     drop(tx);
 
-    let selected = Skim::run_with(options, Some(rx))
-        .map(|out| out.selected_items)
-        .unwrap_or_default();
+    let selected = match Skim::run_with(options, Some(rx)) {
+        Some(out) => {
+            debug!(is_abort = out.is_abort, "skim run completed");
+            out.selected_items
+        }
+        None => {
+            debug!("skim returned no output");
+            Vec::new()
+        }
+    };
+    debug!(count = selected.len(), "skim selection complete");
 
     let mut result = Vec::new();
     for item in selected {
-        if let Some(choice) = item.as_any().downcast_ref::<ChoiceItem>() {
-            result.push(choice.choice.clone());
+        let key = item.text();
+        if let Some(choice) = lookup.get(key.as_ref()) {
+            result.push(choice.clone());
+        } else {
+            debug!(value = %key, "missing selection lookup");
         }
     }
     Ok(result)
