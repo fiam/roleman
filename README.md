@@ -29,7 +29,7 @@ The `cargo release` command bumps the version, tags `vX.Y.Z`, and prepares the r
 Enable the zsh hook so `roleman` updates the current shell:
 
 ```sh
-eval "$(cargo run -- hook zsh)"
+eval "$(roleman hook zsh)"
 ```
 
 Then just run:
@@ -93,7 +93,7 @@ Notes:
 Install the hook (prints a snippet that updates `_ROLEMAN_HOOK_ENV`):
 
 ```sh
-roleman hook zsh
+eval "$(roleman hook zsh)"
 ```
 
 Paste it into `~/.zshrc`, then reload your shell.
@@ -120,6 +120,12 @@ brew install fiam/roleman/roleman
 ```
 
 After each release, update the tap formula to point at the new GitHub release artifact and checksum.
+
+After installing via Homebrew, enable the shell hook:
+
+```sh
+eval "$(roleman hook zsh)"
+```
 
 ## Troubleshooting
 
