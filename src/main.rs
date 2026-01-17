@@ -55,7 +55,9 @@ fn main() {
         }
     }
 
-    if let Err(err) = App::new(options).run() {
+    let runtime = tokio::runtime::Runtime::new().expect("failed to start runtime");
+    let result = runtime.block_on(App::new(options).run());
+    if let Err(err) = result {
         eprintln!("error: {err}");
         std::process::exit(1);
     }

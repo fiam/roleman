@@ -35,7 +35,7 @@ pub fn select_role(choices: &[RoleChoice]) -> Result<Option<RoleChoice>> {
         .multi(false)
         .prompt(Some("roleman> "))
         .build()
-        .map_err(|err| Error::AwsCliOutput(err.to_string()))?;
+        .map_err(|err| Error::Tui(err.to_string()))?;
 
     let selected = run_skim(&options, choices)?;
 
@@ -64,7 +64,7 @@ pub fn manage_hidden(
             .multi(true)
             .prompt(Some("unhide> "))
             .build()
-            .map_err(|err| Error::AwsCliOutput(err.to_string()))?;
+            .map_err(|err| Error::Tui(err.to_string()))?;
         let selected = run_skim(&options, &hidden_choices)?;
         for item in selected {
             hidden_set.remove(&HiddenRole::from_choice(&item));
@@ -82,7 +82,7 @@ pub fn manage_hidden(
             .multi(true)
             .prompt(Some("hide> "))
             .build()
-            .map_err(|err| Error::AwsCliOutput(err.to_string()))?;
+            .map_err(|err| Error::Tui(err.to_string()))?;
         let selected = run_skim(&options, &visible_choices)?;
         for item in selected {
             hidden_set.insert(HiddenRole::from_choice(&item));

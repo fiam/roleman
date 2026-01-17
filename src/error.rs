@@ -8,10 +8,10 @@ pub enum Error {
     ExpiredCache,
     #[error("failed to parse cache file: {path}")]
     CacheParse { path: PathBuf },
-    #[error("failed to execute aws CLI: {0}")]
-    AwsCli(String),
-    #[error("unexpected aws CLI output: {0}")]
-    AwsCliOutput(String),
+    #[error("aws sdk error: {0}")]
+    AwsSdk(String),
+    #[error("tui error: {0}")]
+    Tui(String),
     #[error("no role selection was made")]
     NoSelection,
     #[error("HOME is not set")]

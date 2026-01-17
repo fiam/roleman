@@ -19,7 +19,8 @@
 - Indentation is 4 spaces (Rust defaults).
 - Prefer snake_case for functions/modules and CamelCase for types.
 - Keep modules small and focused; split new features into `src/<feature>.rs` plus `mod` declarations.
-- Prefer small pure functions to make AWS CLI delegation and cache parsing easy to test.
+- Prefer small pure functions to make AWS SDK calls and cache parsing easy to test.
+ - Use async/await with Tokio for AWS SDK calls; avoid blocking in async code paths.
 
 ## Testing Guidelines
 - Use Rust’s built-in test framework (`#[test]`) for unit tests in `src/`.
@@ -37,4 +38,5 @@
 - Hide account/role entries via the persisted list; manage it with the `--manage-hidden` TUI.
 - The selector TUI should be fzf-style (non-fullscreen) and not take over the terminal when possible.
 - Avoid writing to `~/.aws/config` or `~/.aws/credentials`; rely on env exports and device-authorization login when no cache is present.
+- Reuse AWS SSO cache from `~/.aws/sso/cache`, but write refreshed tokens to the Roleman cache under `~/.cache/roleman` (or `$XDG_CACHE_HOME/roleman`).
 - For long-running sessions, support periodic refresh of account/role lists via `refresh_seconds`.
