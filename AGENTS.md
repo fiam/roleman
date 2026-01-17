@@ -19,6 +19,8 @@
 - `cargo run -- --print` — print env exports to stdout (default is hook-only).
 - `cargo run -- open` — open the selected account/role in the AWS access portal.
 - `cargo run -- unset` — print an `unset` line to clear roleman environment variables.
+- `cargo release patch` — bump version, tag release, and prepare CI release artifacts.
+- `cargo dist build` — build distribution artifacts locally (requires `cargo install cargo-dist`).
 
 ## Coding Style & Naming Conventions
 - Use standard Rust formatting via `rustfmt` (e.g., `cargo fmt`).
