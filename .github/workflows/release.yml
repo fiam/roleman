@@ -18,7 +18,12 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Cargo dist
-        uses: taiki-e/cargo-dist@v0.24.1
+      - name: Install cargo-dist
+        uses: taiki-e/install-action@v2
         with:
-          token: ${{ secrets.GITHUB_TOKEN }}
+          tool: cargo-dist
+
+      - name: Cargo dist
+        run: cargo dist --ci github
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
