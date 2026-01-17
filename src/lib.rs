@@ -92,6 +92,7 @@ impl App {
             tracing::debug!("fetching role credentials");
             eprintln!("Fetching role credentials...");
             let profile_name = aws_config::profile_name_for(&choice);
+            let config_path = aws_config::ensure_profile_region(&profile_name, &cache.region)?;
             let creds = aws_sdk::get_role_credentials(
                 &cache.access_token,
                 &cache.region,
@@ -100,7 +101,8 @@ impl App {
             )
             .await?;
             tracing::debug!("role credentials received");
-            let env = EnvVars::from_role_credentials(&creds, &profile_name, &cache.region);
+            let mut env = EnvVars::from_role_credentials(&creds, &profile_name, &cache.region);
+            env.config_file = Some(config_path.display().to_string());
             if let Some(path) = env_file_path(&self.options) {
                 tracing::debug!(path = %path.display(), "writing env file");
                 write_env_file(&path, &env)?;
@@ -280,12 +282,13 @@ mod tests {
             session_token: "token".into(),
             expiration_ms: 1_700_000_000_000,
             region: "us-east-1".into(),
-            profile_name: "roleman-1234-Admin".into(),
+            profile_name: "Acme-Cloud/ReadOnly".into(),
+            config_file: None,
         };
 
         write_env_file(&path, &env).unwrap();
         let contents = std::fs::read_to_string(path).unwrap();
         assert!(contents.contains("AWS_ACCESS_KEY_ID=AKIA123"));
-        assert!(contents.contains("AWS_PROFILE=roleman-1234-Admin"));
+        assert!(contents.contains("AWS_PROFILE=Acme-Cloud/ReadOnly"));
     }
 }
