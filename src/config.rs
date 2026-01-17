@@ -4,15 +4,13 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 
 use crate::error::{Error, Result};
-use crate::model::RoleChoice;
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct Config {
-    pub sso_start_url: Option<String>,
-    pub sso_region: Option<String>,
-    pub refresh_seconds: Option<u64>,
     #[serde(default)]
-    pub hidden_roles: Vec<HiddenRole>,
+    pub accounts: Vec<SsoAccount>,
+    pub default_account: Option<String>,
+    pub refresh_seconds: Option<u64>,
 }
 
 impl Config {
@@ -40,23 +38,11 @@ impl Config {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
-pub struct HiddenRole {
-    pub account_id: String,
-    pub role_name: String,
-}
-
-impl HiddenRole {
-    pub fn from_choice(choice: &RoleChoice) -> Self {
-        Self {
-            account_id: choice.account_id.clone(),
-            role_name: choice.role_name.clone(),
-        }
-    }
-
-    pub fn matches(&self, choice: &RoleChoice) -> bool {
-        self.account_id == choice.account_id && self.role_name == choice.role_name
-    }
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SsoAccount {
+    pub name: String,
+    pub start_url: String,
+    pub sso_region: String,
 }
 
 fn default_config_path() -> Result<PathBuf> {
@@ -80,21 +66,20 @@ mod tests {
         let temp = TempDir::new().unwrap();
         let path = temp.path().join("config.toml");
         let config = Config {
-            sso_start_url: Some("https://example.awsapps.com/start".into()),
-            sso_region: Some("us-east-1".into()),
-            refresh_seconds: Some(120),
-            hidden_roles: vec![HiddenRole {
-                account_id: "1234".into(),
-                role_name: "Admin".into(),
+            accounts: vec![SsoAccount {
+                name: "work".into(),
+                start_url: "https://example.awsapps.com/start".into(),
+                sso_region: "us-east-1".into(),
             }],
+            default_account: Some("work".into()),
+            refresh_seconds: Some(120),
         };
 
         config.save(&path).unwrap();
         let (loaded, _) = Config::load(Some(&path)).unwrap();
-        assert_eq!(loaded.sso_start_url, config.sso_start_url);
-        assert_eq!(loaded.sso_region, config.sso_region);
+        assert_eq!(loaded.accounts, config.accounts);
+        assert_eq!(loaded.default_account, config.default_account);
         assert_eq!(loaded.refresh_seconds, config.refresh_seconds);
-        assert_eq!(loaded.hidden_roles, config.hidden_roles);
     }
 
     #[test]
@@ -107,7 +92,7 @@ mod tests {
         }
 
         let (config, path) = Config::load(None).unwrap();
-        assert!(config.sso_start_url.is_none());
+        assert!(config.accounts.is_empty());
         assert_eq!(path, temp.path().join("roleman").join("config.toml"));
 
         unsafe {

@@ -20,6 +20,8 @@ pub enum Error {
     MissingStartUrl,
     #[error("missing SSO region (pass it or set in config)")]
     MissingRegion,
+    #[error("missing SSO account (configure accounts or pass --account)")]
+    MissingAccount,
     #[error("config error: {0}")]
     Config(String),
 }

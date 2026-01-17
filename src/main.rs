@@ -26,8 +26,10 @@ fn main() {
     };
 
     let mut args_vec = std::env::args().collect::<Vec<_>>();
-    let is_hook = matches!(args_vec.get(1).map(|v| v.as_str()), Some("hook"));
-    let is_unset = matches!(args_vec.get(1).map(|v| v.as_str()), Some("unset"));
+    let subcommand = args_vec.get(1).map(|v| v.as_str());
+    let is_hook = matches!(subcommand, Some("hook"));
+    let is_unset = matches!(subcommand, Some("unset") | Some("u"));
+    let is_set = matches!(subcommand, Some("set") | Some("s"));
     let mut args = args_vec.drain(1..);
     if is_hook {
         let _ = args.next();
@@ -43,6 +45,9 @@ fn main() {
         handle_unset();
         return;
     }
+    if is_set {
+        let _ = args.next();
+    }
 
     let mut options = AppOptions::default();
     while let Some(arg) = args.next() {
@@ -54,7 +59,7 @@ fn main() {
                 }
             }
             "--manage-hidden" => {
-                options.manage_hidden = true;
+                exit_usage("--manage-hidden is no longer supported");
             }
             "--no-cache" => {
                 options.ignore_cache = true;
@@ -63,6 +68,12 @@ fn main() {
                 options.sso_region = args.next();
                 if options.sso_region.is_none() {
                     exit_usage("missing value for --sso-region");
+                }
+            }
+            "-a" | "--account" => {
+                options.account = args.next();
+                if options.account.is_none() {
+                    exit_usage("missing value for --account");
                 }
             }
             "--refresh-seconds" => {
@@ -116,7 +127,7 @@ fn main() {
 
 fn print_usage() {
     eprintln!(
-        "usage: roleman [--sso-start-url <url>] [--sso-region <region>] [--no-cache] [--manage-hidden] [--refresh-seconds <n>] [--env-file <path>] [--print] [--config <path>]\n       roleman <sso-start-url>\n       roleman hook zsh\n       roleman unset"
+        "usage: roleman [--sso-start-url <url>] [--sso-region <region>] [--account <name>] [--no-cache] [--refresh-seconds <n>] [--env-file <path>] [--print] [--config <path>]\n       roleman set|s [options]\n       roleman <sso-start-url>\n       roleman hook zsh\n       roleman unset|u"
     );
 }
 
