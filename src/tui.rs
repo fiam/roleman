@@ -7,6 +7,12 @@ use tracing::{debug, trace};
 use crate::error::{Error, Result};
 use crate::model::RoleChoice;
 
+#[derive(Debug, Clone)]
+pub struct TuiSelection {
+    pub choice: RoleChoice,
+    pub open_in_browser: bool,
+}
+
 struct ChoiceItem {
     label: String,
 }
@@ -17,7 +23,7 @@ impl SkimItem for ChoiceItem {
     }
 }
 
-pub fn select_role(prompt: &str, choices: &[RoleChoice]) -> Result<Option<RoleChoice>> {
+pub fn select_role(prompt: &str, choices: &[RoleChoice]) -> Result<Option<TuiSelection>> {
     if choices.is_empty() {
         return Ok(None);
     }
@@ -29,7 +35,8 @@ pub fn select_role(prompt: &str, choices: &[RoleChoice]) -> Result<Option<RoleCh
         .height(Some("50%"))
         .multi(false)
         .prompt(Some(prompt))
-        .bind(vec!["ctrl-c:abort"])
+        .bind(vec!["ctrl-c:abort", "ctrl-o:accept"])
+        .expect(Some("ctrl-o".to_string()))
         .layout("default")
         .tac(false)
         .reverse(false)
@@ -37,17 +44,20 @@ pub fn select_role(prompt: &str, choices: &[RoleChoice]) -> Result<Option<RoleCh
         .build()
         .map_err(|err| Error::Tui(err.to_string()))?;
 
-    let selected = run_skim(&options, &ordered)?;
+    let (selected, open_in_browser) = run_skim(&options, &ordered)?;
 
     if selected.is_empty() {
         debug!("no role selected");
         return Ok(None);
     }
 
-    Ok(Some(selected[0].clone()))
+    Ok(Some(TuiSelection {
+        choice: selected[0].clone(),
+        open_in_browser,
+    }))
 }
 
-fn run_skim(options: &SkimOptions, choices: &[RoleChoice]) -> Result<Vec<RoleChoice>> {
+fn run_skim(options: &SkimOptions, choices: &[RoleChoice]) -> Result<(Vec<RoleChoice>, bool)> {
     trace!(count = choices.len(), "preparing skim items");
     let mut lookup = std::collections::HashMap::new();
     let items = choices
@@ -68,21 +78,28 @@ fn run_skim(options: &SkimOptions, choices: &[RoleChoice]) -> Result<Vec<RoleCho
     }
     drop(tx);
 
-    let selected = match Skim::run_with(options, Some(rx)) {
+    let (selected, open_in_browser) = match Skim::run_with(options, Some(rx)) {
         Some(out) => {
             debug!(is_abort = out.is_abort, "skim run completed");
             if out.is_abort {
-                Vec::new()
+                (Vec::new(), false)
             } else {
-                out.selected_items
+                (
+                    out.selected_items,
+                    matches!(out.final_key, Key::Ctrl('o')),
+                )
             }
         }
         None => {
             debug!("skim returned no output");
-            Vec::new()
+            (Vec::new(), false)
         }
     };
-    debug!(count = selected.len(), "skim selection complete");
+    debug!(
+        count = selected.len(),
+        open_in_browser,
+        "skim selection complete"
+    );
 
     let mut result = Vec::new();
     for item in selected {
@@ -93,5 +110,5 @@ fn run_skim(options: &SkimOptions, choices: &[RoleChoice]) -> Result<Vec<RoleCho
             debug!(value = %key, "missing selection lookup");
         }
     }
-    Ok(result)
+    Ok((result, open_in_browser))
 }
