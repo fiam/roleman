@@ -17,7 +17,7 @@ impl SkimItem for ChoiceItem {
     }
 }
 
-pub fn select_role(choices: &[RoleChoice]) -> Result<Option<RoleChoice>> {
+pub fn select_role(prompt: &str, choices: &[RoleChoice]) -> Result<Option<RoleChoice>> {
     if choices.is_empty() {
         return Ok(None);
     }
@@ -28,7 +28,8 @@ pub fn select_role(choices: &[RoleChoice]) -> Result<Option<RoleChoice>> {
     let options = SkimOptionsBuilder::default()
         .height(Some("50%"))
         .multi(false)
-        .prompt(Some("roleman> "))
+        .prompt(Some(prompt))
+        .bind(vec!["ctrl-c:abort"])
         .layout("default")
         .tac(false)
         .reverse(false)
@@ -70,7 +71,11 @@ fn run_skim(options: &SkimOptions, choices: &[RoleChoice]) -> Result<Vec<RoleCho
     let selected = match Skim::run_with(options, Some(rx)) {
         Some(out) => {
             debug!(is_abort = out.is_abort, "skim run completed");
-            out.selected_items
+            if out.is_abort {
+                Vec::new()
+            } else {
+                out.selected_items
+            }
         }
         None => {
             debug!("skim returned no output");

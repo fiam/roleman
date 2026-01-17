@@ -94,7 +94,11 @@ impl App {
             }
         }
 
-        let selected = tui::select_role(&visible)?;
+        let prompt = match self.options.action {
+            AppAction::Set => "roleman> ",
+            AppAction::Open => "roleman open> ",
+        };
+        let selected = tui::select_role(prompt, &visible)?;
         if let Some(choice) = selected {
             tracing::debug!(
                 account_id = %choice.account_id,
@@ -157,27 +161,7 @@ fn console_url(start_url: &str, account_id: &str, role_name: &str) -> String {
 }
 
 fn open_in_browser(url: &str) -> Result<()> {
-    let mut command = if cfg!(target_os = "macos") {
-        let mut cmd = std::process::Command::new("open");
-        cmd.arg(url);
-        cmd
-    } else if cfg!(target_os = "windows") {
-        let mut cmd = std::process::Command::new("cmd");
-        cmd.args(["/C", "start", "", url]);
-        cmd
-    } else {
-        let mut cmd = std::process::Command::new("xdg-open");
-        cmd.arg(url);
-        cmd
-    };
-    let status = command.status().map_err(|err| Error::OpenBrowser(err.to_string()))?;
-    if status.success() {
-        Ok(())
-    } else {
-        Err(Error::OpenBrowser(format!(
-            "command exited with status {status}"
-        )))
-    }
+    open::that(url).map_err(|err| Error::OpenBrowser(err.to_string()))
 }
 
 fn env_file_path(options: &AppOptions) -> Option<PathBuf> {
