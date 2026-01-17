@@ -24,6 +24,6 @@ jobs:
           tool: cargo-dist
 
       - name: Cargo dist
-        run: dist --ci github
+        run: dist build --ci github
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
