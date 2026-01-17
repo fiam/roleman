@@ -1,7 +1,7 @@
 use std::fs::OpenOptions;
 use std::path::PathBuf;
 
-use roleman::{App, AppOptions};
+use roleman::{App, AppAction, AppOptions};
 use tracing_subscriber::prelude::*;
 
 fn main() {
@@ -30,6 +30,7 @@ fn main() {
     let is_hook = matches!(subcommand, Some("hook"));
     let is_unset = matches!(subcommand, Some("unset") | Some("u"));
     let is_set = matches!(subcommand, Some("set") | Some("s"));
+    let is_open = matches!(subcommand, Some("open") | Some("o"));
     if is_hook {
         let shell = args_vec.get(1).cloned().unwrap_or_default();
         if shell == "zsh" {
@@ -45,8 +46,11 @@ fn main() {
     }
 
     let mut options = AppOptions::default();
-    let mut index = if is_set { 1 } else { 0 };
-    if is_set
+    if is_open {
+        options.action = AppAction::Open;
+    }
+    let mut index = if is_set || is_open { 1 } else { 0 };
+    if (is_set || is_open)
         && let Some(value) = args_vec.get(1)
         && !value.starts_with('-')
     {
@@ -138,7 +142,7 @@ fn main() {
 
 fn print_usage() {
     eprintln!(
-        "usage: roleman [--sso-start-url <url>] [--sso-region <region>] [--account <name>] [--no-cache] [--show-all] [--refresh-seconds <n>] [--env-file <path>] [--print] [--config <path>]\n       roleman set|s [--account <name>]\n       roleman <sso-start-url>\n       roleman hook zsh\n       roleman unset|u"
+        "usage: roleman [--sso-start-url <url>] [--sso-region <region>] [--account <name>] [--no-cache] [--show-all] [--refresh-seconds <n>] [--env-file <path>] [--print] [--config <path>]\n       roleman set|s [--account <name>]\n       roleman open|o [--account <name>]\n       roleman <sso-start-url>\n       roleman hook zsh\n       roleman unset|u"
     );
 }
 

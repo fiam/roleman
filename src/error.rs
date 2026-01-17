@@ -22,6 +22,8 @@ pub enum Error {
     MissingRegion,
     #[error("missing SSO account (configure accounts or pass --account)")]
     MissingAccount,
+    #[error("failed to open browser: {0}")]
+    OpenBrowser(String),
     #[error("config error: {0}")]
     Config(String),
 }
