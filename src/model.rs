@@ -89,6 +89,7 @@ pub struct EnvVars {
     pub expiration_ms: u64,
     pub region: String,
     pub profile_name: String,
+    pub config_file: Option<String>,
 }
 
 impl EnvVars {
@@ -104,12 +105,13 @@ impl EnvVars {
             expiration_ms: creds.expiration,
             region: region.to_string(),
             profile_name: profile_name.to_string(),
+            config_file: None,
         }
     }
 
     pub fn to_export_lines(&self) -> String {
         let expiration = format_expiration(self.expiration_ms);
-        [
+        let mut lines = vec![
             format!("export AWS_ACCESS_KEY_ID={}", self.access_key_id),
             format!("export AWS_SECRET_ACCESS_KEY={}", self.secret_access_key),
             format!("export AWS_SESSION_TOKEN={}", self.session_token),
@@ -117,8 +119,11 @@ impl EnvVars {
             format!("export AWS_DEFAULT_REGION={}", self.region),
             format!("export AWS_REGION={}", self.region),
             format!("export AWS_PROFILE={}", self.profile_name),
-        ]
-        .join("\n")
+        ];
+        if let Some(path) = &self.config_file {
+            lines.push(format!("export AWS_CONFIG_FILE={}", path));
+        }
+        lines.join("\n")
     }
 }
 
@@ -144,7 +149,8 @@ mod tests {
             session_token: "token".into(),
             expiration_ms: 1_700_000_000_000,
             region: "us-east-1".into(),
-            profile_name: "roleman-1234-Admin".into(),
+            profile_name: "Docker-Cloud/ReadOnly".into(),
+            config_file: Some("/tmp/roleman-aws-config".into()),
         };
         let output = env.to_export_lines();
         assert!(output.contains("AWS_ACCESS_KEY_ID=AKIA123"));
@@ -153,6 +159,7 @@ mod tests {
         assert!(output.contains("AWS_CREDENTIAL_EXPIRATION="));
         assert!(output.contains("AWS_DEFAULT_REGION=us-east-1"));
         assert!(output.contains("AWS_REGION=us-east-1"));
-        assert!(output.contains("AWS_PROFILE=roleman-1234-Admin"));
+        assert!(output.contains("AWS_PROFILE=Docker-Cloud/ReadOnly"));
+        assert!(output.contains("AWS_CONFIG_FILE=/tmp/roleman-aws-config"));
     }
 }
