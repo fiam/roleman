@@ -18,6 +18,13 @@ pub struct App {
     options: AppOptions,
 }
 
+#[derive(Debug, Clone, Copy, Default)]
+pub enum AppAction {
+    #[default]
+    Set,
+    Open,
+}
+
 #[derive(Debug, Default)]
 pub struct AppOptions {
     pub start_url: Option<String>,
@@ -29,6 +36,7 @@ pub struct AppOptions {
     pub print_env: bool,
     pub account: Option<String>,
     pub show_all: bool,
+    pub action: AppAction,
 }
 
 
@@ -94,26 +102,35 @@ impl App {
                 role_name = %choice.role_name,
                 "selected role"
             );
-            tracing::debug!("fetching role credentials");
-            eprintln!("Fetching role credentials...");
-            let profile_name = aws_config::profile_name_for(&choice);
-            let config_path = aws_config::ensure_profile_region(&profile_name, &cache.region)?;
-            let creds = aws_sdk::get_role_credentials(
-                &cache.access_token,
-                &cache.region,
-                &choice.account_id,
-                &choice.role_name,
-            )
-            .await?;
-            tracing::debug!("role credentials received");
-            let mut env = EnvVars::from_role_credentials(&creds, &profile_name, &cache.region);
-            env.config_file = Some(config_path.display().to_string());
-            if let Some(path) = env_file_path(&self.options) {
-                tracing::debug!(path = %path.display(), "writing env file");
-                write_env_file(&path, &env)?;
-            }
-            if self.options.print_env {
-            println!("{}", env.to_export_lines());
+            match self.options.action {
+                AppAction::Set => {
+                    tracing::debug!("fetching role credentials");
+                    eprintln!("Fetching role credentials...");
+                    let profile_name = aws_config::profile_name_for(&choice);
+                    let config_path = aws_config::ensure_profile_region(&profile_name, &cache.region)?;
+                    let creds = aws_sdk::get_role_credentials(
+                        &cache.access_token,
+                        &cache.region,
+                        &choice.account_id,
+                        &choice.role_name,
+                    )
+                    .await?;
+                    tracing::debug!("role credentials received");
+                    let mut env = EnvVars::from_role_credentials(&creds, &profile_name, &cache.region);
+                    env.config_file = Some(config_path.display().to_string());
+                    if let Some(path) = env_file_path(&self.options) {
+                        tracing::debug!(path = %path.display(), "writing env file");
+                        write_env_file(&path, &env)?;
+                    }
+                    if self.options.print_env {
+                        println!("{}", env.to_export_lines());
+                    }
+                }
+                AppAction::Open => {
+                    let url = console_url(&start_url, &choice.account_id, &choice.role_name);
+                    eprintln!("Opening {url}");
+                    open_in_browser(&url)?;
+                }
             }
         }
 
@@ -129,6 +146,38 @@ fn write_env_file(path: &PathBuf, env: &EnvVars) -> Result<()> {
         .map(|_| {
             tracing::trace!(path = %path.display(), "wrote env file");
         })
+}
+
+fn console_url(start_url: &str, account_id: &str, role_name: &str) -> String {
+    let base = start_url.trim_end_matches('/');
+    format!(
+        "{base}/#/console?account_id={account_id}&role_name={role}",
+        role = urlencoding::encode(role_name)
+    )
+}
+
+fn open_in_browser(url: &str) -> Result<()> {
+    let mut command = if cfg!(target_os = "macos") {
+        let mut cmd = std::process::Command::new("open");
+        cmd.arg(url);
+        cmd
+    } else if cfg!(target_os = "windows") {
+        let mut cmd = std::process::Command::new("cmd");
+        cmd.args(["/C", "start", "", url]);
+        cmd
+    } else {
+        let mut cmd = std::process::Command::new("xdg-open");
+        cmd.arg(url);
+        cmd
+    };
+    let status = command.status().map_err(|err| Error::OpenBrowser(err.to_string()))?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(Error::OpenBrowser(format!(
+            "command exited with status {status}"
+        )))
+    }
 }
 
 fn env_file_path(options: &AppOptions) -> Option<PathBuf> {
@@ -324,6 +373,19 @@ mod tests {
         assert_eq!(choices[0].role_name, "Admin");
         assert_eq!(choices[1].role_name, "Admin");
         assert_eq!(choices[2].role_name, "ReadOnly");
+    }
+
+    #[test]
+    fn builds_console_url() {
+        let url = console_url(
+            "https://acme.awsapps.com/start/",
+            "123456789012",
+            "Read Only",
+        );
+        assert_eq!(
+            url,
+            "https://acme.awsapps.com/start/#/console?account_id=123456789012&role_name=Read%20Only"
+        );
     }
 }
 

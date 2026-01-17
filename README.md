@@ -28,11 +28,18 @@ To unset all roleman AWS env vars:
 roleman unset
 ```
 
+To open the selected account/role in the AWS access portal:
+
+```sh
+roleman open
+```
+
 ## Usage
 
 ```
 roleman [--sso-start-url <url>] [--sso-region <region>] [--account <name>] [--no-cache] [--show-all] [--refresh-seconds <n>] [--env-file <path>] [--print] [--config <path>]
 roleman set|s [--account <name>]
+roleman open|o [--account <name>]
 roleman hook zsh
 roleman unset|u
 ```

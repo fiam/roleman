@@ -1,7 +1,7 @@
 # Repository Guidelines
 
 ## Project Structure & Module Organization
-- `src/lib.rs` hosts the library API and core modules (SSO cache, AWS CLI calls, selection UI).
+- `src/lib.rs` hosts the library API and core modules (SSO cache, AWS SDK calls, selection UI).
 - `src/main.rs` is a thin CLI wrapper around the library.
 - `Cargo.toml` defines the crate metadata and dependencies.
 - Keep feature modules under `src/` (e.g., `src/sso.rs`, `src/cache.rs`, `src/tui.rs`).
@@ -17,6 +17,7 @@
 - `cargo run -- hook zsh` — print the zsh hook snippet for env updates.
 - `ROLEMAN_LOG_FILE=/tmp/roleman.log RUST_LOG=roleman=trace cargo run -- ...` — log trace output to a file to avoid TUI clearing logs.
 - `cargo run -- --print` — print env exports to stdout (default is hook-only).
+- `cargo run -- open` — open the selected account/role in the AWS access portal.
 - `cargo run -- unset` — print an `unset` line to clear roleman environment variables.
 
 ## Coding Style & Naming Conventions
@@ -25,7 +26,7 @@
 - Prefer snake_case for functions/modules and CamelCase for types.
 - Keep modules small and focused; split new features into `src/<feature>.rs` plus `mod` declarations.
 - Prefer small pure functions to make AWS SDK calls and cache parsing easy to test.
- - Use async/await with Tokio for AWS SDK calls; avoid blocking in async code paths.
+- Use async/await with Tokio for AWS SDK calls; avoid blocking in async code paths.
 
 ## Testing Guidelines
 - Use Rust’s built-in test framework (`#[test]`) for unit tests in `src/`.
