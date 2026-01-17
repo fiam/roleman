@@ -4,7 +4,6 @@ use std::sync::Arc;
 use skim::prelude::*;
 use tracing::{debug, trace};
 
-use crate::config::HiddenRole;
 use crate::error::{Error, Result};
 use crate::model::RoleChoice;
 
@@ -39,54 +38,6 @@ pub fn select_role(choices: &[RoleChoice]) -> Result<Option<RoleChoice>> {
     }
 
     Ok(Some(selected[0].clone()))
-}
-
-pub fn manage_hidden(
-    choices: &[RoleChoice],
-    hidden: &[HiddenRole],
-) -> Result<Vec<HiddenRole>> {
-    let mut hidden_set: std::collections::HashSet<HiddenRole> =
-        hidden.iter().cloned().collect();
-
-    let hidden_choices = choices
-        .iter()
-        .filter(|choice| hidden_set.iter().any(|entry| entry.matches(choice)))
-        .cloned()
-        .collect::<Vec<_>>();
-    if !hidden_choices.is_empty() {
-        let options = SkimOptionsBuilder::default()
-            .height(Some("50%"))
-            .multi(true)
-            .prompt(Some("unhide> "))
-            .build()
-            .map_err(|err| Error::Tui(err.to_string()))?;
-        let selected = run_skim(&options, &hidden_choices)?;
-        for item in selected {
-            hidden_set.remove(&HiddenRole::from_choice(&item));
-        }
-    }
-
-    let visible_choices = choices
-        .iter()
-        .filter(|choice| !hidden_set.iter().any(|entry| entry.matches(choice)))
-        .cloned()
-        .collect::<Vec<_>>();
-    if !visible_choices.is_empty() {
-        let options = SkimOptionsBuilder::default()
-            .height(Some("50%"))
-            .multi(true)
-            .prompt(Some("hide> "))
-            .build()
-            .map_err(|err| Error::Tui(err.to_string()))?;
-        let selected = run_skim(&options, &visible_choices)?;
-        for item in selected {
-            hidden_set.insert(HiddenRole::from_choice(&item));
-        }
-    }
-
-    let mut updated: Vec<HiddenRole> = hidden_set.into_iter().collect();
-    updated.sort_by(|a, b| a.account_id.cmp(&b.account_id).then(a.role_name.cmp(&b.role_name)));
-    Ok(updated)
 }
 
 fn run_skim(options: &SkimOptions, choices: &[RoleChoice]) -> Result<Vec<RoleChoice>> {

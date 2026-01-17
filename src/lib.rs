@@ -9,8 +9,8 @@ mod tui;
 
 pub use crate::error::{Error, Result};
 use crate::model::{EnvVars, RoleChoice};
-use crate::config::{Config, HiddenRole};
-use std::path::PathBuf;
+use crate::config::{Config, SsoAccount};
+use std::path::{Path, PathBuf};
 use futures::StreamExt;
 use tracing::debug;
 
@@ -22,12 +22,12 @@ pub struct App {
 pub struct AppOptions {
     pub start_url: Option<String>,
     pub sso_region: Option<String>,
-    pub manage_hidden: bool,
     pub refresh_seconds: Option<u64>,
     pub config_path: Option<PathBuf>,
     pub ignore_cache: bool,
     pub env_file: Option<PathBuf>,
     pub print_env: bool,
+    pub account: Option<String>,
 }
 
 
@@ -38,13 +38,15 @@ impl App {
 
     pub async fn run(&self) -> Result<()> {
         let (mut config, config_path) = Config::load(self.options.config_path.as_deref())?;
-        let start_url = self
-            .options
-            .start_url
-            .clone()
-            .or_else(|| config.sso_start_url.clone())
-            .ok_or(Error::MissingStartUrl)?;
-        let sso_region = self.options.sso_region.clone().or(config.sso_region.clone());
+        let config_exists = config_path.exists();
+        let account = resolve_account(
+            &self.options,
+            &mut config,
+            &config_path,
+            config_exists,
+        )?;
+        let start_url = account.start_url;
+        let sso_region = Some(account.sso_region);
         let refresh_seconds = self.options.refresh_seconds.or(config.refresh_seconds);
 
         let (mut cache, choices) = fetch_choices_with_cache(
@@ -54,14 +56,7 @@ impl App {
         )
         .await?;
 
-        if self.options.manage_hidden {
-            let updated = tui::manage_hidden(&choices, &config.hidden_roles)?;
-            config.hidden_roles = updated;
-            config.save(&config_path)?;
-            return Ok(());
-        }
-
-        let mut visible = filter_hidden(&choices, &config.hidden_roles);
+        let mut visible = choices;
         if visible.is_empty()
             && let Some(seconds) = refresh_seconds
         {
@@ -74,7 +69,7 @@ impl App {
                 )
                 .await?;
                 cache = refreshed_cache;
-                visible = filter_hidden(&refreshed, &config.hidden_roles);
+                visible = refreshed;
                 if !visible.is_empty() {
                     break;
                 }
@@ -235,42 +230,13 @@ async fn cache_token(
     sso_cache::device_authorization(start_url, region).await
 }
 
-fn filter_hidden(choices: &[RoleChoice], hidden: &[HiddenRole]) -> Vec<RoleChoice> {
-    choices
-        .iter()
-        .filter(|choice| !hidden.iter().any(|entry| entry.matches(choice)))
-        .cloned()
-        .collect()
-}
-
 #[cfg(test)]
 mod test_support;
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::{Account, Role};
     use tempfile::TempDir;
-
-    #[test]
-    fn filters_hidden_roles() {
-        let account = Account {
-            id: "1234".into(),
-            name: "Main".into(),
-        };
-        let admin = Role { name: "Admin".into() };
-        let read_only = Role { name: "ReadOnly".into() };
-
-        let choices = vec![RoleChoice::new(&account, &admin), RoleChoice::new(&account, &read_only)];
-        let hidden = vec![HiddenRole {
-            account_id: "1234".into(),
-            role_name: "Admin".into(),
-        }];
-
-        let visible = filter_hidden(&choices, &hidden);
-        assert_eq!(visible.len(), 1);
-        assert_eq!(visible[0].role_name, "ReadOnly");
-    }
 
     #[test]
     fn writes_env_file() {
@@ -291,4 +257,107 @@ mod tests {
         assert!(contents.contains("AWS_ACCESS_KEY_ID=AKIA123"));
         assert!(contents.contains("AWS_PROFILE=Acme-Cloud/ReadOnly"));
     }
+}
+
+fn resolve_account(
+    options: &AppOptions,
+    config: &mut Config,
+    config_path: &Path,
+    config_exists: bool,
+) -> Result<SsoAccount> {
+    if let Some(name) = options.account.as_deref() {
+        return config
+            .accounts
+            .iter()
+            .find(|account| account.name == name)
+            .cloned()
+            .ok_or(Error::MissingAccount);
+    }
+
+    if let Some(start_url) = options.start_url.clone() {
+        let region = options.sso_region.clone().ok_or(Error::MissingRegion)?;
+        let account = SsoAccount {
+            name: "manual".to_string(),
+            start_url,
+            sso_region: region,
+        };
+        if !config_exists && config.accounts.is_empty() {
+            maybe_save_account(config, config_path, &account)?;
+        }
+        return Ok(account);
+    }
+
+    if let Some(default_name) = config.default_account.as_deref()
+        && let Some(account) = config.accounts.iter().find(|a| a.name == default_name)
+    {
+        return Ok(account.clone());
+    }
+    if config.accounts.len() == 1 {
+        return Ok(config.accounts[0].clone());
+    }
+    if config.accounts.is_empty() {
+        return Err(Error::MissingAccount);
+    }
+
+    prompt_select_account(&config.accounts)
+}
+
+fn maybe_save_account(
+    config: &mut Config,
+    config_path: &Path,
+    account: &SsoAccount,
+) -> Result<()> {
+    if !prompt_yes_no("No config found. Save this SSO account as default? [y/N] ")? {
+        return Ok(());
+    }
+    let name = prompt_input("Account name: ")?;
+    if name.trim().is_empty() {
+        return Ok(());
+    }
+    let account = SsoAccount {
+        name: name.trim().to_string(),
+        start_url: account.start_url.clone(),
+        sso_region: account.sso_region.clone(),
+    };
+    config.default_account = Some(account.name.clone());
+    config.accounts.push(account);
+    config.save(config_path)?;
+    Ok(())
+}
+
+fn prompt_select_account(accounts: &[SsoAccount]) -> Result<SsoAccount> {
+    eprintln!("Select SSO account:");
+    for (idx, account) in accounts.iter().enumerate() {
+        eprintln!(
+            "  {}. {} ({})",
+            idx + 1,
+            account.name,
+            account.sso_region
+        );
+    }
+    let input = prompt_input("Enter choice: ")?;
+    let index = input.trim().parse::<usize>().ok().and_then(|v| v.checked_sub(1));
+    if let Some(index) = index
+        && let Some(account) = accounts.get(index)
+    {
+        return Ok(account.clone());
+    }
+    Err(Error::MissingAccount)
+}
+
+fn prompt_yes_no(prompt: &str) -> Result<bool> {
+    let input = prompt_input(prompt)?;
+    Ok(matches!(input.trim().to_lowercase().as_str(), "y" | "yes"))
+}
+
+fn prompt_input(prompt: &str) -> Result<String> {
+    use std::io::{self, Write};
+    let mut stdout = io::stdout();
+    stdout.write_all(prompt.as_bytes()).map_err(|err| Error::Config(err.to_string()))?;
+    stdout.flush().map_err(|err| Error::Config(err.to_string()))?;
+    let mut input = String::new();
+    io::stdin()
+        .read_line(&mut input)
+        .map_err(|err| Error::Config(err.to_string()))?;
+    Ok(input)
 }
