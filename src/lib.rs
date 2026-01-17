@@ -1,6 +1,7 @@
 mod aws_config;
 mod aws_sdk;
 mod config;
+mod credentials_cache;
 mod error;
 mod model;
 mod roles_cache;
@@ -115,18 +116,41 @@ impl App {
             }
             match self.options.action {
                 AppAction::Set => {
-                    tracing::debug!("fetching role credentials");
-                    eprintln!("Fetching role credentials...");
+                    let cached_credentials = if self.options.ignore_cache {
+                        None
+                    } else {
+                        credentials_cache::load_cached_credentials(
+                            &start_url,
+                            &cache.region,
+                            &choice.account_id,
+                            &choice.role_name,
+                        )?
+                    };
+                    let creds = if let Some(creds) = cached_credentials {
+                        tracing::debug!("using cached role credentials");
+                        creds
+                    } else {
+                        tracing::debug!("fetching role credentials");
+                        eprintln!("Fetching role credentials...");
+                        let fresh = aws_sdk::get_role_credentials(
+                            &cache.access_token,
+                            &cache.region,
+                            &choice.account_id,
+                            &choice.role_name,
+                        )
+                        .await?;
+                        credentials_cache::save_cached_credentials(
+                            &start_url,
+                            &cache.region,
+                            &choice.account_id,
+                            &choice.role_name,
+                            &fresh,
+                        )?;
+                        tracing::debug!("role credentials received");
+                        fresh
+                    };
                     let profile_name = aws_config::profile_name_for(&choice);
                     let config_path = aws_config::ensure_profile_region(&profile_name, &cache.region)?;
-                    let creds = aws_sdk::get_role_credentials(
-                        &cache.access_token,
-                        &cache.region,
-                        &choice.account_id,
-                        &choice.role_name,
-                    )
-                    .await?;
-                    tracing::debug!("role credentials received");
                     let mut env = EnvVars::from_role_credentials(&creds, &profile_name, &cache.region);
                     env.config_file = Some(config_path.display().to_string());
                     if let Some(path) = env_file_path(&self.options) {
