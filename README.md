@@ -16,6 +16,16 @@ Install from source:
 cargo install --path .
 ```
 
+Release tooling:
+
+```sh
+cargo install cargo-release
+cargo install cargo-dist
+cargo release patch
+```
+
+The `cargo release` command bumps the version, tags `vX.Y.Z`, and prepares the release for CI.
+
 Enable the zsh hook so `roleman` updates the current shell:
 
 ```sh
@@ -87,6 +97,29 @@ roleman hook zsh
 ```
 
 Paste it into `~/.zshrc`, then reload your shell.
+
+## Releases
+
+Roleman uses `cargo-dist` to build release artifacts on tag pushes. To create a release:
+
+```sh
+cargo release patch
+git push --follow-tags
+```
+
+The GitHub Action uploads builds and generates the release artifacts automatically.
+
+## Homebrew Tap
+
+The release workflow can publish a Homebrew formula. Configure the tap in `Cargo.toml` under `[workspace.metadata.dist]` (default: `fiam/homebrew-roleman`) and create the repository if it doesn't exist.
+
+Install with:
+
+```sh
+brew install fiam/roleman/roleman
+```
+
+After each release, update the tap formula to point at the new GitHub release artifact and checksum.
 
 ## Troubleshooting
 
