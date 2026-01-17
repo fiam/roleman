@@ -12,6 +12,13 @@ time = { version = "0.3", features = ["formatting", "parsing"] }
 toml = "0.8"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+sha1 = "0.10"
+aws-config = "1"
+aws-sdk-sso = "1"
+aws-sdk-ssooidc = "1"
+aws-types = "1"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time"] }
+futures = "0.3"
 
 [dev-dependencies]
 tempfile = "3"

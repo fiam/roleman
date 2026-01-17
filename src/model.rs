@@ -40,38 +40,6 @@ impl RoleChoice {
 }
 
 #[derive(Debug, Deserialize)]
-pub struct AwsListAccounts {
-    #[serde(rename = "accountList")]
-    pub account_list: Vec<AwsAccount>,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct AwsAccount {
-    #[serde(rename = "accountId")]
-    pub account_id: String,
-    #[serde(rename = "accountName")]
-    pub account_name: String,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct AwsListAccountRoles {
-    #[serde(rename = "roleList")]
-    pub role_list: Vec<AwsRole>,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct AwsRole {
-    #[serde(rename = "roleName")]
-    pub role_name: String,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct AwsRoleCredentialsResponse {
-    #[serde(rename = "roleCredentials")]
-    pub role_credentials: AwsRoleCredentials,
-}
-
-#[derive(Debug, Deserialize)]
 pub struct AwsRoleCredentials {
     #[serde(rename = "accessKeyId")]
     pub access_key_id: String,
@@ -89,8 +57,6 @@ pub struct AwsRegisterClient {
     pub client_id: String,
     #[serde(rename = "clientSecret")]
     pub client_secret: String,
-    #[serde(rename = "clientSecretExpiresAt")]
-    pub client_secret_expires_at: Option<u64>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -100,8 +66,6 @@ pub struct AwsStartDeviceAuthorization {
     #[serde(rename = "userCode")]
     pub user_code: String,
     #[serde(rename = "verificationUri")]
-    pub verification_uri: String,
-    #[serde(rename = "verificationUriComplete")]
     pub verification_uri_complete: String,
     #[serde(rename = "expiresIn")]
     pub expires_in: u64,
