@@ -7,6 +7,7 @@ mod model;
 mod roles_cache;
 mod sso_cache;
 mod tui;
+mod ui;
 
 pub use crate::error::{Error, Result};
 use crate::model::{EnvVars, RoleChoice};
@@ -110,7 +111,7 @@ impl App {
             );
             if matches!(self.options.action, AppAction::Set) && selection.open_in_browser {
                 let url = console_url(&start_url, &choice.account_id, &choice.role_name);
-                eprintln!("Opening {url}");
+                eprintln!("{}", ui::action(&format!("Opening {url}")));
                 open_in_browser(&url)?;
                 return Ok(());
             }
@@ -128,10 +129,11 @@ impl App {
                     };
                     let creds = if let Some(creds) = cached_credentials {
                         tracing::debug!("using cached role credentials");
+                        eprintln!("{}", ui::info("Using cached role credentials."));
                         creds
                     } else {
                         tracing::debug!("fetching role credentials");
-                        eprintln!("Fetching role credentials...");
+                        let spinner = ui::spinner("Fetching role credentials...");
                         let fresh = aws_sdk::get_role_credentials(
                             &cache.access_token,
                             &cache.region,
@@ -139,6 +141,7 @@ impl App {
                             &choice.role_name,
                         )
                         .await?;
+                        spinner.finish_with_message(ui::success("Fetched role credentials"));
                         credentials_cache::save_cached_credentials(
                             &start_url,
                             &cache.region,
@@ -163,7 +166,7 @@ impl App {
                 }
                 AppAction::Open => {
                     let url = console_url(&start_url, &choice.account_id, &choice.role_name);
-                    eprintln!("Opening {url}");
+                    eprintln!("{}", ui::action(&format!("Opening {url}")));
                     open_in_browser(&url)?;
                 }
             }
@@ -222,8 +225,11 @@ async fn fetch_choices_with_cache(
         && let Some((choices, age)) = roles_cache::load_cached_roles(start_url)?
     {
         eprintln!(
-            "Using cached account/role list (updated {} ago).",
-            roles_cache::format_age(age)
+            "{}",
+            ui::info(&format!(
+                "Using cached account/role list (updated {} ago).",
+                roles_cache::format_age(age)
+            ))
         );
         return Ok((cache, choices));
     }
@@ -234,26 +240,32 @@ async fn fetch_choices_with_cache(
     }
 
     let mut choices = Vec::new();
-    eprintln!("Fetching SSO accounts...");
+    let accounts_spinner = ui::spinner("Fetching SSO accounts...");
     let mut accounts = match aws_sdk::list_accounts(&cache.access_token, &cache.region).await {
         Ok(accounts) => accounts,
         Err(err) => {
             if let Some((choices, age)) = cached_fallback {
+                accounts_spinner.finish_and_clear();
                 eprintln!(
-                    "Failed to refresh account/role list; using cached data from {} ago.",
-                    roles_cache::format_age(age)
+                    "{}",
+                    ui::warn(&format!(
+                        "Failed to refresh account/role list; using cached data from {} ago.",
+                        roles_cache::format_age(age)
+                    ))
                 );
                 return Ok((cache, choices));
             }
+            accounts_spinner.finish_and_clear();
             return Err(err);
         }
     };
+    accounts_spinner.finish_with_message(ui::success("Fetched SSO accounts"));
     accounts.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
     for account in &accounts {
         debug!(account_id = %account.id, account_name = %account.name, "fetched account");
     }
 
-    eprintln!("Fetching roles for all accounts...");
+    let roles_spinner = ui::spinner("Fetching roles for all accounts...");
     let roles_by_account = futures::stream::iter(accounts.clone())
         .map(|account| {
             let token = cache.access_token.clone();
@@ -271,15 +283,21 @@ async fn fetch_choices_with_cache(
         Ok(roles) => roles,
         Err(err) => {
             if let Some((choices, age)) = cached_fallback {
+                roles_spinner.finish_and_clear();
                 eprintln!(
-                    "Failed to refresh account/role list; using cached data from {} ago.",
-                    roles_cache::format_age(age)
+                    "{}",
+                    ui::warn(&format!(
+                        "Failed to refresh account/role list; using cached data from {} ago.",
+                        roles_cache::format_age(age)
+                    ))
                 );
                 return Ok((cache, choices));
             }
+            roles_spinner.finish_and_clear();
             return Err(err);
         }
     };
+    roles_spinner.finish_with_message(ui::success("Fetched roles"));
 
     for (account, roles) in roles_by_account {
         for role in roles {
