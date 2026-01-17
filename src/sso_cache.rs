@@ -3,9 +3,10 @@ use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use sha1::{Digest, Sha1};
+use crate::aws_sdk;
 use crate::error::{Error, Result};
 use crate::model::CacheEntry;
-use crate::aws_sdk;
+use crate::ui;
 use tracing::{debug, trace};
 
 pub fn load_valid_cache(start_url: &str) -> Result<CacheEntry> {
@@ -25,8 +26,11 @@ pub fn load_valid_cache(start_url: &str) -> Result<CacheEntry> {
         let remaining = time_until_expiry(&entry.expires_at).unwrap_or_default();
         debug!(expires_at = %entry.expires_at, "using cached sso token");
         eprintln!(
-            "Using cached SSO token (valid for {}).",
-            format_duration(remaining)
+            "{}",
+            ui::info(&format!(
+                "Using cached SSO token (valid for {}).",
+                format_duration(remaining)
+            ))
         );
         return Ok(entry);
     }
@@ -35,7 +39,7 @@ pub fn load_valid_cache(start_url: &str) -> Result<CacheEntry> {
 
 pub async fn device_authorization(start_url: &str, region: &str) -> Result<CacheEntry> {
     debug!(start_url, region, "starting device authorization");
-    eprintln!("Starting SSO device authorization...");
+    eprintln!("{}", ui::action("Starting SSO device authorization..."));
     let client = aws_sdk::register_client(region).await?;
     trace!(client_id = %client.client_id, "registered client");
     let auth = aws_sdk::start_device_authorization(
@@ -47,12 +51,18 @@ pub async fn device_authorization(start_url: &str, region: &str) -> Result<Cache
     .await?;
     trace!(device_code = %auth.device_code, "received device authorization");
 
-    println!("Open this URL to sign in:\n{}\n", auth.verification_uri_complete);
-    println!("Enter code: {}\n", auth.user_code);
+    eprintln!(
+        "{}",
+        ui::action(&format!(
+            "Open this URL to sign in:\n{}\n",
+            auth.verification_uri_complete
+        ))
+    );
+    eprintln!("🔐 {}", auth.user_code);
     if let Err(err) = open_browser(&auth.verification_uri_complete) {
         debug!(error = %err, "failed to open browser");
     }
-    eprintln!("Waiting for authorization to complete...");
+    eprintln!("{}", ui::action("Waiting for authorization to complete..."));
 
     let deadline = SystemTime::now()
         .checked_add(std::time::Duration::from_secs(auth.expires_in))
@@ -66,7 +76,7 @@ pub async fn device_authorization(start_url: &str, region: &str) -> Result<Cache
 
         debug!("polling create-token");
         if last_feedback.elapsed().unwrap_or_default().as_secs() >= 5 {
-            eprintln!("Still waiting for device authorization...");
+            eprintln!("{}", ui::info("Still waiting for device authorization..."));
             last_feedback = SystemTime::now();
         }
         match aws_sdk::create_token(
@@ -78,7 +88,7 @@ pub async fn device_authorization(start_url: &str, region: &str) -> Result<Cache
         .await
         {
             Ok(token) => {
-                eprintln!("Authorization complete, fetching access token...");
+                eprintln!("{}", ui::success("Authorization complete, fetching access token..."));
                 let expires_at = SystemTime::now()
                     .checked_add(std::time::Duration::from_secs(token.expires_in))
                     .unwrap_or(SystemTime::now());
@@ -91,7 +101,7 @@ pub async fn device_authorization(start_url: &str, region: &str) -> Result<Cache
                     region: region.to_string(),
                 };
                 write_cache_entry(start_url, &entry)?;
-                eprintln!("Access token cached.");
+                eprintln!("{}", ui::success("Access token cached."));
                 return Ok(entry);
             }
             Err(err) => {
@@ -244,18 +254,7 @@ fn cache_filename(start_url: &str) -> String {
 }
 
 fn open_browser(url: &str) -> std::io::Result<()> {
-    if cfg!(target_os = "macos") {
-        std::process::Command::new("open").arg(url).status()?;
-    } else if cfg!(target_os = "linux") {
-        std::process::Command::new("xdg-open").arg(url).status()?;
-    } else if cfg!(target_os = "windows") {
-        std::process::Command::new("cmd")
-            .args(["/C", "start", "", url])
-            .status()?;
-    } else {
-        let _ = url;
-    }
-    Ok(())
+    open::that(url).map(|_| ()).map_err(std::io::Error::other)
 }
 
 #[cfg(test)]
