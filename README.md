@@ -111,7 +111,7 @@ The GitHub Action uploads builds and generates the release artifacts automatical
 
 ## Homebrew Tap
 
-The release workflow can publish a Homebrew formula. Configure the tap in `Cargo.toml` under `[workspace.metadata.dist]` (default: `fiam/homebrew-roleman`) and create the repository if it doesn't exist.
+The release workflow can publish a Homebrew formula. Configure the tap and enable the Homebrew publish job in `Cargo.toml` under `[workspace.metadata.dist]` (default: `fiam/homebrew-roleman`) and create the repository if it doesn't exist.
 
 Install with:
 
