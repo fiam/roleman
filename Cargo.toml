@@ -2,6 +2,11 @@
 name = "roleman"
 version = "0.1.0"
 edition = "2024"
+description = "AWS SSO role selector that exports shell credentials"
+license = "MIT"
+readme = "README.md"
+repository = "https://github.com/fiam/roleman"
+homepage = "https://github.com/fiam/roleman"
 
 [dependencies]
 serde = { version = "1", features = ["derive"] }
@@ -40,3 +45,4 @@ targets = ["x86_64-unknown-linux-gnu", "aarch64-apple-darwin", "x86_64-apple-dar
 [workspace.metadata.release]
 tag-name = "v{{version}}"
 pre-release-commit-message = "release: v{{version}}"
+publish = false
