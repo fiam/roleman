@@ -106,7 +106,7 @@ pub fn format_age(age: Duration) -> String {
     }
 }
 
-fn roleman_cache_dir() -> Result<PathBuf> {
+pub fn roleman_cache_dir() -> Result<PathBuf> {
     if let Ok(dir) = std::env::var("XDG_CACHE_HOME") {
         Ok(PathBuf::from(dir).join("roleman"))
     } else {
