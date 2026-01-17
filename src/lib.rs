@@ -153,7 +153,9 @@ impl App {
                         tracing::debug!(path = %path.display(), "writing env file");
                         write_env_file(&path, &env)?;
                     }
-                    if self.options.print_env {
+                    let should_print =
+                        self.options.print_env || env_file_path(&self.options).is_none();
+                    if should_print {
                         println!("{}", env.to_export_lines());
                     }
                 }
