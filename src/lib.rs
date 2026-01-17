@@ -26,7 +26,10 @@ pub struct AppOptions {
     pub refresh_seconds: Option<u64>,
     pub config_path: Option<PathBuf>,
     pub ignore_cache: bool,
+    pub env_file: Option<PathBuf>,
+    pub print_env: bool,
 }
+
 
 impl App {
     pub fn new(options: AppOptions) -> Self {
@@ -80,6 +83,13 @@ impl App {
 
         let selected = tui::select_role(&visible)?;
         if let Some(choice) = selected {
+            tracing::debug!(
+                account_id = %choice.account_id,
+                account_name = %choice.account_name,
+                role_name = %choice.role_name,
+                "selected role"
+            );
+            tracing::debug!("fetching role credentials");
             eprintln!("Fetching role credentials...");
             let profile_name = aws_config::profile_name_for(&choice);
             let creds = aws_sdk::get_role_credentials(
@@ -89,12 +99,45 @@ impl App {
                 &choice.role_name,
             )
             .await?;
+            tracing::debug!("role credentials received");
             let env = EnvVars::from_role_credentials(&creds, &profile_name, &cache.region);
+            if let Some(path) = env_file_path(&self.options) {
+                tracing::debug!(path = %path.display(), "writing env file");
+                write_env_file(&path, &env)?;
+            }
+            if self.options.print_env {
             println!("{}", env.to_export_lines());
+            }
         }
 
         Ok(())
     }
+}
+
+fn write_env_file(path: &PathBuf, env: &EnvVars) -> Result<()> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|err| Error::Config(err.to_string()))?;
+    }
+    std::fs::write(path, env.to_export_lines()).map_err(|err| Error::Config(err.to_string()))
+        .map(|_| {
+            tracing::trace!(path = %path.display(), "wrote env file");
+        })
+}
+
+fn env_file_path(options: &AppOptions) -> Option<PathBuf> {
+    if let Some(path) = &options.env_file {
+        tracing::debug!(path = %path.display(), "using env file from option");
+        return Some(path.clone());
+    }
+    if let Ok(path) = std::env::var("_ROLEMAN_HOOK_ENV")
+        && !path.is_empty()
+    {
+        let path = PathBuf::from(path);
+        tracing::debug!(path = %path.display(), "using env file from _ROLEMAN_HOOK_ENV");
+        return Some(path);
+    }
+    tracing::debug!("no env file path configured");
+    None
 }
 
 async fn fetch_choices_with_cache(
@@ -205,6 +248,7 @@ mod test_support;
 mod tests {
     use super::*;
     use crate::model::{Account, Role};
+    use tempfile::TempDir;
 
     #[test]
     fn filters_hidden_roles() {
@@ -224,5 +268,24 @@ mod tests {
         let visible = filter_hidden(&choices, &hidden);
         assert_eq!(visible.len(), 1);
         assert_eq!(visible[0].role_name, "ReadOnly");
+    }
+
+    #[test]
+    fn writes_env_file() {
+        let temp = TempDir::new().unwrap();
+        let path = temp.path().join("env.sh");
+        let env = EnvVars {
+            access_key_id: "AKIA123".into(),
+            secret_access_key: "secret".into(),
+            session_token: "token".into(),
+            expiration_ms: 1_700_000_000_000,
+            region: "us-east-1".into(),
+            profile_name: "roleman-1234-Admin".into(),
+        };
+
+        write_env_file(&path, &env).unwrap();
+        let contents = std::fs::read_to_string(path).unwrap();
+        assert!(contents.contains("AWS_ACCESS_KEY_ID=AKIA123"));
+        assert!(contents.contains("AWS_PROFILE=roleman-1234-Admin"));
     }
 }

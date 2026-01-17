@@ -14,6 +14,10 @@
 - `cargo test` — run all unit and integration tests.
 - `cargo run -- --manage-hidden` — open the hidden-role manager.
 - `cargo run -- --no-cache` — force SSO sign-in instead of using cached tokens.
+- `cargo run -- hook zsh` — print the zsh hook snippet for env updates.
+- `ROLEMAN_LOG_FILE=/tmp/roleman.log RUST_LOG=roleman=trace cargo run -- ...` — log trace output to a file to avoid TUI clearing logs.
+- `cargo run -- --print` — print env exports to stdout (default is hook-only).
+- `cargo run -- unset` — print an `unset` line to clear roleman environment variables.
 
 ## Coding Style & Naming Conventions
 - Use standard Rust formatting via `rustfmt` (e.g., `cargo fmt`).
@@ -42,3 +46,4 @@
 - Reuse AWS SSO cache from `~/.aws/sso/cache`, but write refreshed tokens to the Roleman cache under `~/.cache/roleman` (or `$XDG_CACHE_HOME/roleman`).
 - Cache account/role listings for 24 hours in the Roleman cache to avoid unnecessary API calls (skip with `--no-cache`).
 - For long-running sessions, support periodic refresh of account/role lists via `refresh_seconds`.
+- For shell integration, `roleman hook zsh` prints a zsh hook that sources a per-TTY env file if it exists and deletes it after sourcing. The hook uses `_ROLEMAN_HOOK_ENV` internally.

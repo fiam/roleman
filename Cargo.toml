@@ -12,6 +12,7 @@ time = { version = "0.3", features = ["formatting", "parsing"] }
 toml = "0.8"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tracing-appender = "0.2"
 sha1 = "0.10"
 aws-config = "1"
 aws-sdk-sso = "1"
