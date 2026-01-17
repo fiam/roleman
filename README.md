@@ -10,6 +10,12 @@ Build and run:
 cargo run -- --sso-start-url https://acme.awsapps.com/start --sso-region us-east-1
 ```
 
+Install from source:
+
+```sh
+cargo install --path .
+```
+
 Enable the zsh hook so `roleman` updates the current shell:
 
 ```sh
