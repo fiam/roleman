@@ -9,6 +9,13 @@ use crate::model::CacheEntry;
 use crate::ui;
 use tracing::{debug, trace};
 
+#[derive(Debug, Clone)]
+struct ClientRegistration {
+    client_id: String,
+    client_secret: String,
+    expires_at: String,
+}
+
 pub fn load_valid_cache(start_url: &str) -> Result<CacheEntry> {
     let aws_cache_dir = aws_sso_cache_dir()?;
     let roleman_cache_dir = roleman_cache_dir()?;
@@ -40,7 +47,39 @@ pub fn load_valid_cache(start_url: &str) -> Result<CacheEntry> {
 pub async fn device_authorization(start_url: &str, region: &str) -> Result<CacheEntry> {
     debug!(start_url, region, "starting device authorization");
     eprintln!("{}", ui::action("Starting SSO device authorization..."));
-    let client = aws_sdk::register_client(region).await?;
+    let client = if let Some(client) = load_valid_client(region)? {
+        eprintln!("{}", ui::info("Using cached SSO client registration."));
+        client
+    } else {
+        let client = aws_sdk::register_client(region).await?;
+        let expires_at = if client.client_secret_expires_at > 0 {
+            time::OffsetDateTime::from_unix_timestamp(client.client_secret_expires_at)
+                .ok()
+                .and_then(|value| {
+                    value
+                        .format(&time::format_description::well_known::Rfc3339)
+                        .ok()
+                })
+        } else {
+            None
+        }
+        .unwrap_or_else(|| {
+            time::OffsetDateTime::from(
+                SystemTime::now()
+                    .checked_add(std::time::Duration::from_secs(24 * 60 * 60))
+                    .unwrap_or(SystemTime::now()),
+            )
+            .format(&time::format_description::well_known::Rfc3339)
+            .unwrap_or_default()
+        });
+        let registration = ClientRegistration {
+            client_id: client.client_id,
+            client_secret: client.client_secret,
+            expires_at,
+        };
+        write_client_cache(region, &registration)?;
+        registration
+    };
     trace!(client_id = %client.client_id, "registered client");
     let auth = aws_sdk::start_device_authorization(
         region,
@@ -127,6 +166,114 @@ fn roleman_cache_dir() -> Result<PathBuf> {
         let home = std::env::var("HOME").map_err(|_| Error::MissingHome)?;
         Ok(Path::new(&home).join(".cache").join("roleman"))
     }
+}
+
+fn load_valid_client(region: &str) -> Result<Option<ClientRegistration>> {
+    if let Some(entry) = load_client_from_roleman_cache(region)?
+        && !is_expired(&entry.expires_at)?
+    {
+        return Ok(Some(entry));
+    }
+    let entries = load_client_entries_from_dir(&aws_sso_cache_dir()?)?;
+    let mut best: Option<ClientRegistration> = None;
+    let mut best_epoch = 0;
+    for entry in entries {
+        if is_expired(&entry.expires_at)? {
+            continue;
+        }
+        let expires_epoch = aws_time_to_epoch(&entry.expires_at)?;
+        if expires_epoch > best_epoch {
+            best_epoch = expires_epoch;
+            best = Some(entry);
+        }
+    }
+    Ok(best)
+}
+
+fn load_client_from_roleman_cache(region: &str) -> Result<Option<ClientRegistration>> {
+    let path = roleman_cache_dir()?.join(client_cache_filename(region));
+    if !path.exists() {
+        return Ok(None);
+    }
+    let data = match fs::read_to_string(&path) {
+        Ok(data) => data,
+        Err(_) => return Ok(None),
+    };
+    let value: serde_json::Value = match serde_json::from_str(&data) {
+        Ok(value) => value,
+        Err(_) => return Ok(None),
+    };
+    let cached_region = value.get("region").and_then(|v| v.as_str()).unwrap_or_default();
+    if cached_region != region {
+        return Ok(None);
+    }
+    let client_id = value.get("clientId").and_then(|v| v.as_str());
+    let client_secret = value.get("clientSecret").and_then(|v| v.as_str());
+    let expires_at = value.get("expiresAt").and_then(|v| v.as_str());
+    if let (Some(client_id), Some(client_secret), Some(expires_at)) =
+        (client_id, client_secret, expires_at)
+    {
+        return Ok(Some(ClientRegistration {
+            client_id: client_id.to_string(),
+            client_secret: client_secret.to_string(),
+            expires_at: expires_at.to_string(),
+        }));
+    }
+    Ok(None)
+}
+
+fn load_client_entries_from_dir(dir: &Path) -> Result<Vec<ClientRegistration>> {
+    if !dir.exists() {
+        return Ok(Vec::new());
+    }
+    let mut entries = Vec::new();
+    for entry in fs::read_dir(dir).map_err(|_| Error::MissingCache)? {
+        let entry = match entry {
+            Ok(entry) => entry,
+            Err(_) => continue,
+        };
+        let path = entry.path();
+        if path.extension().and_then(|ext| ext.to_str()) != Some("json") {
+            continue;
+        }
+        let data = match fs::read_to_string(&path) {
+            Ok(data) => data,
+            Err(_) => continue,
+        };
+        let value: serde_json::Value = match serde_json::from_str(&data) {
+            Ok(value) => value,
+            Err(_) => continue,
+        };
+        let client_id = value.get("clientId").and_then(|v| v.as_str());
+        let client_secret = value.get("clientSecret").and_then(|v| v.as_str());
+        let expires_at = value.get("expiresAt").and_then(|v| v.as_str());
+        if let (Some(client_id), Some(client_secret), Some(expires_at)) =
+            (client_id, client_secret, expires_at)
+        {
+            entries.push(ClientRegistration {
+                client_id: client_id.to_string(),
+                client_secret: client_secret.to_string(),
+                expires_at: expires_at.to_string(),
+            });
+        }
+    }
+    Ok(entries)
+}
+
+fn write_client_cache(region: &str, entry: &ClientRegistration) -> Result<()> {
+    let cache_dir = roleman_cache_dir()?;
+    fs::create_dir_all(&cache_dir).map_err(|_| Error::MissingCache)?;
+    let path = cache_dir.join(client_cache_filename(region));
+    let value = serde_json::json!({
+        "region": region,
+        "clientId": entry.client_id,
+        "clientSecret": entry.client_secret,
+        "expiresAt": entry.expires_at,
+    });
+    let data =
+        serde_json::to_string(&value).map_err(|_| Error::CacheParse { path: path.clone() })?;
+    fs::write(&path, data).map_err(|_| Error::CacheParse { path })?;
+    Ok(())
 }
 
 fn read_cache_entries_from_dirs(
@@ -253,6 +400,13 @@ fn cache_filename(start_url: &str) -> String {
     format!("roleman-{:x}.json", digest)
 }
 
+fn client_cache_filename(region: &str) -> String {
+    let mut hasher = Sha1::new();
+    hasher.update(region.as_bytes());
+    let digest = hasher.finalize();
+    format!("client-{:x}.json", digest)
+}
+
 fn open_browser(url: &str) -> std::io::Result<()> {
     open::that(url).map(|_| ()).map_err(std::io::Error::other)
 }
@@ -260,10 +414,46 @@ fn open_browser(url: &str) -> std::io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tempfile::TempDir;
 
     #[test]
     fn parses_expiration() {
         let epoch = aws_time_to_epoch("2099-01-01T00:00:00Z").unwrap();
         assert!(epoch > 0);
+    }
+
+    #[test]
+    fn loads_cached_client_registration() {
+        let _lock = crate::test_support::lock_env();
+        let temp = TempDir::new().unwrap();
+        let previous = std::env::var("XDG_CACHE_HOME").ok();
+        unsafe {
+            std::env::set_var("XDG_CACHE_HOME", temp.path());
+        }
+
+        let expires_at = time::OffsetDateTime::from(
+            SystemTime::now()
+                .checked_add(std::time::Duration::from_secs(600))
+                .unwrap(),
+        )
+        .format(&time::format_description::well_known::Rfc3339)
+        .unwrap();
+        let cached = ClientRegistration {
+            client_id: "client".into(),
+            client_secret: "secret".into(),
+            expires_at,
+        };
+        write_client_cache("us-east-1", &cached).unwrap();
+
+        let loaded = load_valid_client("us-east-1").unwrap();
+        assert!(loaded.is_some());
+
+        unsafe {
+            if let Some(value) = previous {
+                std::env::set_var("XDG_CACHE_HOME", value);
+            } else {
+                std::env::remove_var("XDG_CACHE_HOME");
+            }
+        }
     }
 }
