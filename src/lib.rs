@@ -3,6 +3,7 @@ mod aws_sdk;
 mod config;
 mod error;
 mod model;
+mod roles_cache;
 mod sso_cache;
 mod tui;
 
@@ -24,6 +25,7 @@ pub struct AppOptions {
     pub manage_hidden: bool,
     pub refresh_seconds: Option<u64>,
     pub config_path: Option<PathBuf>,
+    pub ignore_cache: bool,
 }
 
 impl App {
@@ -42,8 +44,12 @@ impl App {
         let sso_region = self.options.sso_region.clone().or(config.sso_region.clone());
         let refresh_seconds = self.options.refresh_seconds.or(config.refresh_seconds);
 
-        let (mut cache, choices) =
-            fetch_choices_with_cache(&start_url, sso_region.as_deref()).await?;
+        let (mut cache, choices) = fetch_choices_with_cache(
+            &start_url,
+            sso_region.as_deref(),
+            self.options.ignore_cache,
+        )
+        .await?;
 
         if self.options.manage_hidden {
             let updated = tui::manage_hidden(&choices, &config.hidden_roles)?;
@@ -53,17 +59,21 @@ impl App {
         }
 
         let mut visible = filter_hidden(&choices, &config.hidden_roles);
-        if visible.is_empty() {
-            if let Some(seconds) = refresh_seconds {
-                loop {
-                    tokio::time::sleep(std::time::Duration::from_secs(seconds)).await;
-                    let (refreshed_cache, refreshed) =
-                        fetch_choices_with_cache(&start_url, sso_region.as_deref()).await?;
-                    cache = refreshed_cache;
-                    visible = filter_hidden(&refreshed, &config.hidden_roles);
-                    if !visible.is_empty() {
-                        break;
-                    }
+        if visible.is_empty()
+            && let Some(seconds) = refresh_seconds
+        {
+            loop {
+                tokio::time::sleep(std::time::Duration::from_secs(seconds)).await;
+                let (refreshed_cache, refreshed) = fetch_choices_with_cache(
+                    &start_url,
+                    sso_region.as_deref(),
+                    self.options.ignore_cache,
+                )
+                .await?;
+                cache = refreshed_cache;
+                visible = filter_hidden(&refreshed, &config.hidden_roles);
+                if !visible.is_empty() {
+                    break;
                 }
             }
         }
@@ -90,11 +100,40 @@ impl App {
 async fn fetch_choices_with_cache(
     start_url: &str,
     sso_region: Option<&str>,
+    ignore_cache: bool,
 ) -> Result<(crate::model::CacheEntry, Vec<RoleChoice>)> {
-    let cache = cache_token(start_url, sso_region).await?;
+    let cache = cache_token(start_url, sso_region, ignore_cache).await?;
+    let mut cached_fallback: Option<(Vec<RoleChoice>, std::time::Duration)> = None;
+    if !ignore_cache
+        && let Some((choices, age)) = roles_cache::load_cached_roles(start_url)?
+    {
+        eprintln!(
+            "Using cached account/role list (updated {} ago).",
+            roles_cache::format_age(age)
+        );
+        return Ok((cache, choices));
+    }
+    if !ignore_cache
+        && let Some((choices, age)) = roles_cache::load_cached_roles_with_age(start_url)?
+    {
+        cached_fallback = Some((choices, age));
+    }
+
     let mut choices = Vec::new();
     eprintln!("Fetching SSO accounts...");
-    let accounts = aws_sdk::list_accounts(&cache.access_token, &cache.region).await?;
+    let accounts = match aws_sdk::list_accounts(&cache.access_token, &cache.region).await {
+        Ok(accounts) => accounts,
+        Err(err) => {
+            if let Some((choices, age)) = cached_fallback {
+                eprintln!(
+                    "Failed to refresh account/role list; using cached data from {} ago.",
+                    roles_cache::format_age(age)
+                );
+                return Ok((cache, choices));
+            }
+            return Err(err);
+        }
+    };
     for account in &accounts {
         debug!(account_id = %account.id, account_name = %account.name, "fetched account");
     }
@@ -113,38 +152,54 @@ async fn fetch_choices_with_cache(
         .collect::<Vec<_>>()
         .await;
 
-    let roles_by_account = roles_by_account
-        .into_iter()
-        .collect::<Result<Vec<_>>>()?;
+    let roles_by_account = match roles_by_account.into_iter().collect::<Result<Vec<_>>>() {
+        Ok(roles) => roles,
+        Err(err) => {
+            if let Some((choices, age)) = cached_fallback {
+                eprintln!(
+                    "Failed to refresh account/role list; using cached data from {} ago.",
+                    roles_cache::format_age(age)
+                );
+                return Ok((cache, choices));
+            }
+            return Err(err);
+        }
+    };
 
     for (account, roles) in roles_by_account {
         for role in roles {
             choices.push(RoleChoice::new(&account, &role));
         }
     }
+
+    roles_cache::save_cached_roles(start_url, &choices)?;
     Ok((cache, choices))
 }
 
 async fn cache_token(
     start_url: &str,
     sso_region: Option<&str>,
+    ignore_cache: bool,
 ) -> Result<crate::model::CacheEntry> {
-    match sso_cache::load_valid_cache(start_url) {
-        Ok(entry) => Ok(entry),
-        Err(_) => {
-            let region = sso_region.ok_or(Error::MissingRegion)?;
-            sso_cache::device_authorization(start_url, region).await
-        }
+    if !ignore_cache
+        && let Ok(entry) = sso_cache::load_valid_cache(start_url)
+    {
+        return Ok(entry);
     }
+    let region = sso_region.ok_or(Error::MissingRegion)?;
+    sso_cache::device_authorization(start_url, region).await
 }
 
 fn filter_hidden(choices: &[RoleChoice], hidden: &[HiddenRole]) -> Vec<RoleChoice> {
     choices
         .iter()
-        .cloned()
         .filter(|choice| !hidden.iter().any(|entry| entry.matches(choice)))
+        .cloned()
         .collect()
 }
+
+#[cfg(test)]
+mod test_support;
 
 #[cfg(test)]
 mod tests {

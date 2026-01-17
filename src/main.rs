@@ -20,6 +20,9 @@ fn main() {
             "--manage-hidden" => {
                 options.manage_hidden = true;
             }
+            "--no-cache" => {
+                options.ignore_cache = true;
+            }
             "--sso-region" => {
                 options.sso_region = args.next();
                 if options.sso_region.is_none() {
@@ -65,7 +68,7 @@ fn main() {
 
 fn print_usage() {
     eprintln!(
-        "usage: roleman [--sso-start-url <url>] [--sso-region <region>] [--manage-hidden] [--refresh-seconds <n>] [--config <path>]\n       roleman <sso-start-url>"
+        "usage: roleman [--sso-start-url <url>] [--sso-region <region>] [--no-cache] [--manage-hidden] [--refresh-seconds <n>] [--config <path>]\n       roleman <sso-start-url>"
     );
 }
 

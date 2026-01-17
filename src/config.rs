@@ -76,6 +76,7 @@ mod tests {
 
     #[test]
     fn roundtrip_config() {
+        let _lock = crate::test_support::lock_env();
         let temp = TempDir::new().unwrap();
         let path = temp.path().join("config.toml");
         let config = Config {
@@ -98,6 +99,7 @@ mod tests {
 
     #[test]
     fn default_path_uses_xdg_config_home() {
+        let _lock = crate::test_support::lock_env();
         let temp = TempDir::new().unwrap();
         let previous = std::env::var("XDG_CONFIG_HOME").ok();
         unsafe {

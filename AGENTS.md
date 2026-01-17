@@ -13,6 +13,7 @@
 - `cargo build --release` — produce an optimized release binary.
 - `cargo test` — run all unit and integration tests.
 - `cargo run -- --manage-hidden` — open the hidden-role manager.
+- `cargo run -- --no-cache` — force SSO sign-in instead of using cached tokens.
 
 ## Coding Style & Naming Conventions
 - Use standard Rust formatting via `rustfmt` (e.g., `cargo fmt`).
@@ -39,4 +40,5 @@
 - The selector TUI should be fzf-style (non-fullscreen) and not take over the terminal when possible.
 - Avoid writing to `~/.aws/config` or `~/.aws/credentials`; rely on env exports and device-authorization login when no cache is present.
 - Reuse AWS SSO cache from `~/.aws/sso/cache`, but write refreshed tokens to the Roleman cache under `~/.cache/roleman` (or `$XDG_CACHE_HOME/roleman`).
+- Cache account/role listings for 24 hours in the Roleman cache to avoid unnecessary API calls (skip with `--no-cache`).
 - For long-running sessions, support periodic refresh of account/role lists via `refresh_seconds`.
