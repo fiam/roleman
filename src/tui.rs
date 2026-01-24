@@ -38,6 +38,10 @@ pub fn select_role(
     let mut ordered = choices.to_vec();
     ordered.reverse();
     debug!(count = ordered.len(), "starting role selection");
+    eprintln!(
+        "{}",
+        crate::ui::hint("Type to filter, ↑/↓ to navigate, ⏎ selects, ^o opens in browser.")
+    );
     let max_height = std::env::var("LINES")
         .ok()
         .and_then(|value| value.parse::<usize>().ok())

@@ -29,3 +29,7 @@ pub fn warn(message: &str) -> String {
 pub fn action(message: &str) -> String {
     format!("🔍 {}", message.cyan())
 }
+
+pub fn hint(message: &str) -> String {
+    format!("› {}", message.dimmed())
+}
