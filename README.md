@@ -32,6 +32,12 @@ Enable the zsh or bash hook so `roleman` updates the current shell:
 eval "$(roleman hook zsh)"
 ```
 
+Or install it automatically:
+
+```sh
+roleman install-hook
+```
+
 Then just run:
 
 ```sh
@@ -75,6 +81,7 @@ roleman [--sso-start-url <url>] [--sso-region <region>] [--account <name>] [--no
 roleman set|s [--account <name>]
 roleman open|o [--account <name>]
 roleman hook zsh|bash
+roleman install-hook [--force] [--alias]
 roleman unset|u
 ```
 
@@ -119,6 +126,12 @@ eval "$(roleman hook zsh)"
 ```
 
 Paste it into your shell config (`~/.zshrc` or `~/.bashrc`), then reload your shell.
+
+You can also install automatically (appends to your shell startup file):
+
+```sh
+roleman install-hook
+```
 
 ## Releases
 
