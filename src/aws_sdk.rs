@@ -3,8 +3,8 @@ use aws_sdk_sso::types::{AccountInfo, RoleInfo};
 use aws_smithy_runtime_api::client::result::SdkError as SmithySdkError;
 use aws_smithy_runtime_api::http::Response as SmithyResponse;
 use aws_smithy_types::error::metadata::ProvideErrorMetadata;
-use aws_types::SdkConfig;
 use aws_types::request_id::RequestId;
+use aws_types::SdkConfig;
 
 use crate::error::{Error, Result};
 use crate::model::{
@@ -20,9 +20,30 @@ pub async fn sdk_config(region: &str) -> Result<SdkConfig> {
         .await)
 }
 
-pub async fn register_client(region: &str) -> Result<AwsRegisterClient> {
+async fn ssooidc_client(region: &str) -> Result<aws_sdk_ssooidc::Client> {
     let config = sdk_config(region).await?;
-    let client = aws_sdk_ssooidc::Client::new(&config);
+    let mut builder = aws_sdk_ssooidc::config::Builder::from(&config);
+    if let Ok(url) = std::env::var("ROLEMAN_SSOOIDC_ENDPOINT") {
+        if !url.is_empty() {
+            builder = builder.endpoint_url(url);
+        }
+    }
+    Ok(aws_sdk_ssooidc::Client::from_conf(builder.build()))
+}
+
+async fn sso_client(region: &str) -> Result<aws_sdk_sso::Client> {
+    let config = sdk_config(region).await?;
+    let mut builder = aws_sdk_sso::config::Builder::from(&config);
+    if let Ok(url) = std::env::var("ROLEMAN_SSO_ENDPOINT") {
+        if !url.is_empty() {
+            builder = builder.endpoint_url(url);
+        }
+    }
+    Ok(aws_sdk_sso::Client::from_conf(builder.build()))
+}
+
+pub async fn register_client(region: &str) -> Result<AwsRegisterClient> {
+    let client = ssooidc_client(region).await?;
     let output = client
         .register_client()
         .client_name("roleman")
@@ -50,8 +71,7 @@ pub async fn start_device_authorization(
     client_secret: &str,
     start_url: &str,
 ) -> Result<AwsStartDeviceAuthorization> {
-    let config = sdk_config(region).await?;
-    let client = aws_sdk_ssooidc::Client::new(&config);
+    let client = ssooidc_client(region).await?;
     let output = client
         .start_device_authorization()
         .client_id(client_id)
@@ -85,8 +105,7 @@ pub async fn create_token(
     client_secret: &str,
     device_code: &str,
 ) -> Result<AwsCreateToken> {
-    let config = sdk_config(region).await?;
-    let client = aws_sdk_ssooidc::Client::new(&config);
+    let client = ssooidc_client(region).await?;
     let output = client
         .create_token()
         .client_id(client_id)
@@ -107,8 +126,7 @@ pub async fn create_token(
 }
 
 pub async fn list_accounts(access_token: &str, region: &str) -> Result<Vec<Account>> {
-    let config = sdk_config(region).await?;
-    let client = aws_sdk_sso::Client::new(&config);
+    let client = sso_client(region).await?;
     let mut accounts = Vec::new();
     let mut next_token = None;
 
@@ -136,8 +154,7 @@ pub async fn list_account_roles(
     region: &str,
     account_id: &str,
 ) -> Result<Vec<Role>> {
-    let config = sdk_config(region).await?;
-    let client = aws_sdk_sso::Client::new(&config);
+    let client = sso_client(region).await?;
     let mut roles = Vec::new();
     let mut next_token = None;
 
@@ -208,8 +225,7 @@ pub async fn get_role_credentials(
     account_id: &str,
     role_name: &str,
 ) -> Result<AwsRoleCredentials> {
-    let config = sdk_config(region).await?;
-    let client = aws_sdk_sso::Client::new(&config);
+    let client = sso_client(region).await?;
     let output = client
         .get_role_credentials()
         .access_token(access_token)
