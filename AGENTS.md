@@ -30,6 +30,7 @@
 - Keep modules small and focused; split new features into `src/<feature>.rs` plus `mod` declarations.
 - Prefer small pure functions to make AWS SDK calls and cache parsing easy to test.
 - Use async/await with Tokio for AWS SDK calls; avoid blocking in async code paths.
+- Always run formatting checks (e.g., `cargo fmt`) before committing.
 
 ## Testing Guidelines
 - Use Rust’s built-in test framework (`#[test]`) for unit tests in `src/`.

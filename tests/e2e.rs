@@ -1,7 +1,7 @@
 mod support;
 
 use roleman::aws_sdk;
-use roleman::{start_mock_server, MockServerOptions};
+use roleman::{MockServerOptions, start_mock_server};
 
 #[tokio::test]
 async fn e2e_sso_flow_uses_mock_endpoints() {
