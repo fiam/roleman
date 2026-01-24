@@ -4,6 +4,8 @@ use std::sync::Arc;
 use skim::prelude::*;
 use tracing::{debug, trace};
 
+use crate::aws_config;
+use crate::credentials_cache::{self, CachedCredentialsStatus};
 use crate::error::{Error, Result};
 use crate::model::RoleChoice;
 
@@ -23,7 +25,12 @@ impl SkimItem for ChoiceItem {
     }
 }
 
-pub fn select_role(prompt: &str, choices: &[RoleChoice]) -> Result<Option<TuiSelection>> {
+pub fn select_role(
+    prompt: &str,
+    choices: &[RoleChoice],
+    start_url: &str,
+    region: &str,
+) -> Result<Option<TuiSelection>> {
     if choices.is_empty() {
         return Ok(None);
     }
@@ -44,7 +51,7 @@ pub fn select_role(prompt: &str, choices: &[RoleChoice]) -> Result<Option<TuiSel
         .build()
         .map_err(|err| Error::Tui(err.to_string()))?;
 
-    let (selected, open_in_browser) = run_skim(&options, &ordered)?;
+    let (selected, open_in_browser) = run_skim(&options, &ordered, start_url, region)?;
 
     if selected.is_empty() {
         debug!("no role selected");
@@ -57,18 +64,45 @@ pub fn select_role(prompt: &str, choices: &[RoleChoice]) -> Result<Option<TuiSel
     }))
 }
 
-fn run_skim(options: &SkimOptions, choices: &[RoleChoice]) -> Result<(Vec<RoleChoice>, bool)> {
+fn run_skim(
+    options: &SkimOptions,
+    choices: &[RoleChoice],
+    start_url: &str,
+    region: &str,
+) -> Result<(Vec<RoleChoice>, bool)> {
     trace!(count = choices.len(), "preparing skim items");
+    let current_profile = std::env::var("AWS_PROFILE").ok();
     let mut lookup = std::collections::HashMap::new();
-    let items = choices
-        .iter()
-        .map(|choice| {
-            let label = choice.label();
-            lookup.insert(label.clone(), choice.clone());
-            ChoiceItem { label }
-        })
-        .map(|item| Arc::new(item) as Arc<dyn SkimItem>)
-        .collect::<Vec<_>>();
+    let mut items = Vec::with_capacity(choices.len());
+    for choice in choices {
+        let label = if let Some(profile) = current_profile.as_deref() {
+            let prefix = if aws_config::profile_name_for(choice) == profile {
+                let status = match credentials_cache::cached_credentials_status(
+                    start_url,
+                    region,
+                    &choice.account_id,
+                    &choice.role_name,
+                ) {
+                    Ok(status) => status,
+                    Err(err) => {
+                        debug!(error = %err, "failed to check cached credentials");
+                        CachedCredentialsStatus::Expired
+                    }
+                };
+                match status {
+                    CachedCredentialsStatus::Valid => "* ",
+                    CachedCredentialsStatus::Expired | CachedCredentialsStatus::Missing => "! ",
+                }
+            } else {
+                "  "
+            };
+            format!("{}{}", prefix, choice.label())
+        } else {
+            choice.label()
+        };
+        lookup.insert(label.clone(), choice.clone());
+        items.push(Arc::new(ChoiceItem { label }) as Arc<dyn SkimItem>);
+    }
 
     let (tx, rx): (SkimItemSender, SkimItemReceiver) = unbounded();
     for item in items {

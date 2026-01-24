@@ -91,7 +91,7 @@ impl App {
             AppAction::Set => "roleman> ",
             AppAction::Open => "roleman open> ",
         };
-        let selected = tui::select_role(prompt, &visible)?;
+        let selected = tui::select_role(prompt, &visible, &start_url, &cache.region)?;
         if let Some(selection) = selected {
             let choice = selection.choice;
             tracing::debug!(
