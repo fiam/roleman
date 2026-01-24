@@ -14,6 +14,7 @@ struct ClientRegistration {
     client_id: String,
     client_secret: String,
     expires_at: String,
+    client_name: Option<String>,
 }
 
 pub fn load_valid_cache(start_url: &str) -> Result<CacheEntry> {
@@ -61,7 +62,13 @@ pub async fn device_authorization(start_url: &str, region: &str) -> Result<Cache
                         .ok()
                 })
         } else {
-            None
+            time::OffsetDateTime::from(
+                SystemTime::now()
+                    .checked_add(std::time::Duration::from_secs(10 * 365 * 24 * 60 * 60))
+                    .unwrap_or(SystemTime::now()),
+            )
+            .format(&time::format_description::well_known::Rfc3339)
+            .ok()
         }
         .unwrap_or_else(|| {
             time::OffsetDateTime::from(
@@ -76,6 +83,7 @@ pub async fn device_authorization(start_url: &str, region: &str) -> Result<Cache
             client_id: client.client_id,
             client_secret: client.client_secret,
             expires_at,
+            client_name: Some("roleman".to_string()),
         };
         write_client_cache(region, &registration)?;
         registration
@@ -181,6 +189,9 @@ fn load_valid_client(region: &str) -> Result<Option<ClientRegistration>> {
     let mut best: Option<ClientRegistration> = None;
     let mut best_epoch = 0;
     for entry in entries {
+        if entry.client_name.as_deref() != Some("roleman") {
+            continue;
+        }
         if is_expired(&entry.expires_at)? {
             continue;
         }
@@ -216,6 +227,7 @@ fn load_client_from_roleman_cache(region: &str) -> Result<Option<ClientRegistrat
     let client_id = value.get("clientId").and_then(|v| v.as_str());
     let client_secret = value.get("clientSecret").and_then(|v| v.as_str());
     let expires_at = value.get("expiresAt").and_then(|v| v.as_str());
+    let client_name = value.get("clientName").and_then(|v| v.as_str());
     if let (Some(client_id), Some(client_secret), Some(expires_at)) =
         (client_id, client_secret, expires_at)
     {
@@ -223,6 +235,7 @@ fn load_client_from_roleman_cache(region: &str) -> Result<Option<ClientRegistrat
             client_id: client_id.to_string(),
             client_secret: client_secret.to_string(),
             expires_at: expires_at.to_string(),
+            client_name: client_name.map(|name| name.to_string()),
         }));
     }
     Ok(None)
@@ -253,6 +266,7 @@ fn load_client_entries_from_dir(dir: &Path) -> Result<Vec<ClientRegistration>> {
         let client_id = value.get("clientId").and_then(|v| v.as_str());
         let client_secret = value.get("clientSecret").and_then(|v| v.as_str());
         let expires_at = value.get("expiresAt").and_then(|v| v.as_str());
+        let client_name = value.get("clientName").and_then(|v| v.as_str());
         if let (Some(client_id), Some(client_secret), Some(expires_at)) =
             (client_id, client_secret, expires_at)
         {
@@ -260,6 +274,7 @@ fn load_client_entries_from_dir(dir: &Path) -> Result<Vec<ClientRegistration>> {
                 client_id: client_id.to_string(),
                 client_secret: client_secret.to_string(),
                 expires_at: expires_at.to_string(),
+                client_name: client_name.map(|name| name.to_string()),
             });
         }
     }
@@ -275,6 +290,7 @@ fn write_client_cache(region: &str, entry: &ClientRegistration) -> Result<()> {
         "clientId": entry.client_id,
         "clientSecret": entry.client_secret,
         "expiresAt": entry.expires_at,
+        "clientName": entry.client_name.as_deref().unwrap_or("roleman"),
     });
     let data =
         serde_json::to_string(&value).map_err(|_| Error::CacheParse { path: path.clone() })?;
@@ -449,6 +465,7 @@ mod tests {
             client_id: "client".into(),
             client_secret: "secret".into(),
             expires_at,
+            client_name: Some("roleman".into()),
         };
         write_client_cache("us-east-1", &cached).unwrap();
 
