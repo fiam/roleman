@@ -11,6 +11,13 @@ use crate::roles_cache::roleman_cache_dir;
 
 const EXPIRY_SAFETY_SECS: u64 = 60;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CachedCredentialsStatus {
+    Valid,
+    Expired,
+    Missing,
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 struct CachedCredentials {
     access_key_id: String,
@@ -46,6 +53,31 @@ pub fn load_cached_credentials(
         session_token: cached.session_token,
         expiration: cached.expiration_ms,
     }))
+}
+
+pub fn cached_credentials_status(
+    start_url: &str,
+    region: &str,
+    account_id: &str,
+    role_name: &str,
+) -> Result<CachedCredentialsStatus> {
+    let path = cache_path(start_url, region, account_id, role_name)?;
+    if !path.exists() {
+        return Ok(CachedCredentialsStatus::Missing);
+    }
+    let data = match fs::read_to_string(&path) {
+        Ok(data) => data,
+        Err(_) => return Ok(CachedCredentialsStatus::Missing),
+    };
+    let cached: CachedCredentials = match serde_json::from_str(&data) {
+        Ok(cached) => cached,
+        Err(_) => return Ok(CachedCredentialsStatus::Missing),
+    };
+    if is_expired(cached.expiration_ms)? {
+        Ok(CachedCredentialsStatus::Expired)
+    } else {
+        Ok(CachedCredentialsStatus::Valid)
+    }
 }
 
 pub fn save_cached_credentials(
