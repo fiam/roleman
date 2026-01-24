@@ -9,7 +9,7 @@ use axum::http::{HeaderMap, StatusCode, Uri};
 use axum::response::IntoResponse;
 use axum::routing::any;
 use axum::{Json, Router};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use tokio::sync::oneshot;
 use tokio::task::JoinHandle;
 use tracing::info;
@@ -228,10 +228,7 @@ fn default_state() -> MockState {
         "222222222222".to_string(),
         vec!["Engineer".to_string(), "Billing".to_string()],
     );
-    roles.insert(
-        "333333333333".to_string(),
-        vec!["Sandbox".to_string()],
-    );
+    roles.insert("333333333333".to_string(), vec!["Sandbox".to_string()]);
     MockState { accounts, roles }
 }
 

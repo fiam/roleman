@@ -1,6 +1,6 @@
 use std::fs::OpenOptions;
 
-use roleman::{run_mock_server, MockServerOptions};
+use roleman::{MockServerOptions, run_mock_server};
 use tracing_subscriber::prelude::*;
 
 fn main() {

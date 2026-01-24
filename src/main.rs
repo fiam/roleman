@@ -2,7 +2,7 @@ use std::fs::OpenOptions;
 use std::io::IsTerminal;
 use std::path::PathBuf;
 
-use roleman::{config::HookPromptMode, ui, App, AppAction, AppOptions, Config};
+use roleman::{App, AppAction, AppOptions, Config, config::HookPromptMode, ui};
 use tracing_subscriber::prelude::*;
 
 fn main() {
@@ -382,9 +382,14 @@ fn maybe_prompt_install_hook(config_path: Option<&std::path::Path>) {
 
 fn default_config_path() -> std::path::PathBuf {
     if let Ok(dir) = std::env::var("XDG_CONFIG_HOME") {
-        std::path::PathBuf::from(dir).join("roleman").join("config.toml")
+        std::path::PathBuf::from(dir)
+            .join("roleman")
+            .join("config.toml")
     } else if let Ok(home) = std::env::var("HOME") {
-        std::path::PathBuf::from(home).join(".config").join("roleman").join("config.toml")
+        std::path::PathBuf::from(home)
+            .join(".config")
+            .join("roleman")
+            .join("config.toml")
     } else {
         std::path::PathBuf::from("roleman-config.toml")
     }
