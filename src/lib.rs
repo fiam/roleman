@@ -204,6 +204,12 @@ fn env_file_path(options: &AppOptions) -> Option<PathBuf> {
     if let Ok(path) = std::env::var("_ROLEMAN_HOOK_ENV")
         && !path.is_empty()
     {
+        if std::env::var("_ROLEMAN_HOOK_VERSION").is_err() {
+            eprintln!(
+                "{}",
+                ui::warn("Detected an outdated shell hook. Reload your shell to update it.")
+            );
+        }
         let path = PathBuf::from(path);
         tracing::debug!(path = %path.display(), "using env file from _ROLEMAN_HOOK_ENV");
         return Some(path);
