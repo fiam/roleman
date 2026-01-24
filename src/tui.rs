@@ -38,8 +38,15 @@ pub fn select_role(
     let mut ordered = choices.to_vec();
     ordered.reverse();
     debug!(count = ordered.len(), "starting role selection");
+    let max_height = std::env::var("LINES")
+        .ok()
+        .and_then(|value| value.parse::<usize>().ok())
+        .map(|lines| std::cmp::max(10, lines / 2))
+        .unwrap_or(20);
+    let height_lines = std::cmp::min(ordered.len().saturating_add(3), max_height);
+    let height = format!("{height_lines}");
     let options = SkimOptionsBuilder::default()
-        .height(Some("50%"))
+        .height(Some(height.as_str()))
         .multi(false)
         .prompt(Some(prompt))
         .bind(vec!["ctrl-c:abort", "ctrl-o:accept"])
