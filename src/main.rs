@@ -44,7 +44,6 @@ fn main() {
         handle_unset();
         return;
     }
-
     let mut options = AppOptions::default();
     if is_open {
         options.action = AppAction::Open;

@@ -50,6 +50,24 @@ To open the selected account/role in the AWS access portal:
 roleman open
 ```
 
+## Mock Server
+
+For demos or end-to-end tests, run a local mock server that simulates AWS SSO:
+
+```sh
+roleman-mock-server --port 7777
+```
+
+Then point Roleman at it:
+
+```sh
+export ROLEMAN_SSO_ENDPOINT=http://127.0.0.1:7777/sso
+export ROLEMAN_SSOOIDC_ENDPOINT=http://127.0.0.1:7777/ssooidc
+roleman --sso-start-url https://mock.awsapps.com/start --sso-region us-east-1
+```
+
+The mock server serves a fixed set of accounts/roles and returns fake credentials.
+
 ## Usage
 
 ```
@@ -58,6 +76,10 @@ roleman set|s [--account <name>]
 roleman open|o [--account <name>]
 roleman hook zsh
 roleman unset|u
+```
+
+```
+roleman-mock-server [--port <port>]
 ```
 
 ## Config

@@ -19,6 +19,7 @@
 - `cargo run -- --print` — print env exports to stdout (default is hook-only).
 - `cargo run -- open` — open the selected account/role in the AWS access portal.
 - `cargo run -- unset` — print an `unset` line to clear roleman environment variables.
+- `roleman-mock-server --port 7777` — run a local mock AWS SSO server for demos and E2E tests.
 - `cargo release patch` — bump version, tag release, and prepare CI release artifacts.
 - `cargo dist build` — build distribution artifacts locally (requires `cargo install cargo-dist`).
 
@@ -51,4 +52,5 @@
 - Reuse AWS SSO cache from `~/.aws/sso/cache`, but write refreshed tokens to the Roleman cache under `~/.cache/roleman` (or `$XDG_CACHE_HOME/roleman`).
 - Cache account/role listings for 24 hours in the Roleman cache to avoid unnecessary API calls (skip with `--no-cache`).
 - For long-running sessions, support periodic refresh of account/role lists via `refresh_seconds`.
+- Mock endpoints can be supplied via `ROLEMAN_SSO_ENDPOINT` and `ROLEMAN_SSOOIDC_ENDPOINT` for demos/tests.
 - For shell integration, `roleman hook zsh` prints a zsh hook that sources a per-TTY env file if it exists and deletes it after sourcing. The hook uses `_ROLEMAN_HOOK_ENV` internally.
