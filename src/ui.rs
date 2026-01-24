@@ -33,3 +33,15 @@ pub fn action(message: &str) -> String {
 pub fn hint(message: &str) -> String {
     format!("› {}", message.dimmed())
 }
+
+pub fn print_line(message: &str) {
+    eprintln!("{message}");
+}
+
+pub fn print_warn(message: &str) {
+    eprintln!("{}", warn(message));
+}
+
+pub fn print_info(message: &str) {
+    eprintln!("{}", info(message));
+}
