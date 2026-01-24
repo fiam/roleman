@@ -37,6 +37,10 @@ fn main() {
             print_zsh_hook();
             return;
         }
+        if shell == "bash" {
+            print_bash_hook();
+            return;
+        }
         eprintln!("unsupported shell hook: {shell}");
         std::process::exit(2);
     }
@@ -141,7 +145,7 @@ fn main() {
 
 fn print_usage() {
     eprintln!(
-        "usage: roleman [--sso-start-url <url>] [--sso-region <region>] [--account <name>] [--no-cache] [--show-all] [--refresh-seconds <n>] [--env-file <path>] [--print] [--config <path>]\n       roleman set|s [--account <name>]\n       roleman open|o [--account <name>]\n       roleman <sso-start-url>\n       roleman hook zsh\n       roleman unset|u"
+        "usage: roleman [--sso-start-url <url>] [--sso-region <region>] [--account <name>] [--no-cache] [--show-all] [--refresh-seconds <n>] [--env-file <path>] [--print] [--config <path>]\n       roleman set|s [--account <name>]\n       roleman open|o [--account <name>]\n       roleman <sso-start-url>\n       roleman hook zsh|bash\n       roleman unset|u"
     );
 }
 
@@ -159,6 +163,26 @@ _roleman_precmd() {{
 }}
 autoload -Uz add-zsh-hook
 add-zsh-hook precmd _roleman_precmd"##
+    );
+}
+
+fn print_bash_hook() {
+    println!(
+        r##"export _ROLEMAN_HOOK_ENV="${{XDG_STATE_HOME:-$HOME/.local/state}}/roleman/env-${{TTY//\//_}}"
+roleman() {{
+  command roleman --env-file "$_ROLEMAN_HOOK_ENV" "$@"
+}}
+_roleman_prompt_command() {{
+  if [[ -f "$_ROLEMAN_HOOK_ENV" ]]; then
+    source "$_ROLEMAN_HOOK_ENV"
+    rm -f "$_ROLEMAN_HOOK_ENV"
+  fi
+}}
+if [[ -n "${{PROMPT_COMMAND:-}}" ]]; then
+  PROMPT_COMMAND="_roleman_prompt_command;${{PROMPT_COMMAND}}"
+else
+  PROMPT_COMMAND="_roleman_prompt_command"
+fi"##
     );
 }
 
