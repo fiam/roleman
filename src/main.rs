@@ -1,7 +1,8 @@
 use std::fs::OpenOptions;
+use std::io::IsTerminal;
 use std::path::PathBuf;
 
-use roleman::{App, AppAction, AppOptions};
+use roleman::{config::HookPromptMode, ui, App, AppAction, AppOptions, Config};
 use tracing_subscriber::prelude::*;
 
 fn main() {
@@ -142,6 +143,10 @@ fn main() {
         index += 1;
     }
 
+    if !is_hook && !is_install_hook {
+        maybe_prompt_install_hook(options.config_path.as_deref());
+    }
+
     let runtime = tokio::runtime::Runtime::new().expect("failed to start runtime");
     let result = runtime.block_on(App::new(options).run());
     if let Err(err) = result {
@@ -248,7 +253,7 @@ fn install_hook(force: bool, alias: bool) -> Result<(), String> {
     let path = shell_rc_path(&shell)?;
     let mut contents = std::fs::read_to_string(&path).unwrap_or_default();
     let install_line = format!("eval \"$(roleman hook {shell})\"");
-    if contents.contains(&install_line) || contents.contains("_ROLEMAN_HOOK_VERSION") {
+    if has_active_hook(&contents, &install_line) {
         if !force {
             return Err("hook already installed (use --force to overwrite)".into());
         }
@@ -306,4 +311,119 @@ fn remove_hook_lines(contents: &str) -> String {
         })
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+fn maybe_prompt_install_hook(config_path: Option<&std::path::Path>) {
+    let (mut config, config_path) = match Config::load(config_path) {
+        Ok((config, path)) => (config, path),
+        Err(err) => {
+            ui::print_warn(&format!("Failed to load config for hook prompt: {err}"));
+            (Config::default(), default_config_path())
+        }
+    };
+    let mode = hook_prompt_mode(&config);
+    if matches!(mode, HookPromptMode::Never) {
+        return;
+    }
+    if std::env::var("_ROLEMAN_HOOK_VERSION").is_ok() {
+        return;
+    }
+    let Ok(shell) = detect_shell().ok_or(()) else {
+        return;
+    };
+    let Ok(path) = shell_rc_path(&shell) else {
+        return;
+    };
+    let install_line = format!("eval \"$(roleman hook {shell})\"");
+    if std::env::var("_ROLEMAN_HOOK_ENV").is_ok() {
+        ui::print_warn(&format!(
+            "Shell hook looks outdated. Please reload your shell: source {}",
+            path.display()
+        ));
+        return;
+    }
+    let contents = std::fs::read_to_string(&path).unwrap_or_default();
+    if has_active_hook(&contents, &install_line) {
+        ui::print_warn(&format!(
+            "Shell hook is installed but not active. Reload your shell: source {}",
+            path.display()
+        ));
+        return;
+    }
+    if matches!(mode, HookPromptMode::Outdated) {
+        return;
+    }
+    if !std::io::stdin().is_terminal() {
+        return;
+    }
+    ui::print_line(&ui::hint("Shell hook isn’t installed."));
+    ui::print_line(&ui::hint(&format!(
+        "Want me to add this to {}?",
+        path.display()
+    )));
+    ui::print_line("");
+    ui::print_line(&install_line);
+    ui::print_line("");
+    if !prompt_yes_no("Would you like to install it? [y/N] ") {
+        if prompt_yes_no("Don’t ask about the hook again? [y/N] ") {
+            config.hook_prompt = Some(HookPromptMode::Never);
+            config.prompt_for_hook = None;
+            if let Err(err) = config.save(&config_path) {
+                ui::print_warn(&format!("Failed to save config: {err}"));
+            }
+        }
+        return;
+    }
+    let alias = prompt_yes_no("Also add alias rl=roleman? [y/N] ");
+    if let Err(err) = install_hook(false, alias) {
+        eprintln!("error: {err}");
+    }
+}
+
+fn default_config_path() -> std::path::PathBuf {
+    if let Ok(dir) = std::env::var("XDG_CONFIG_HOME") {
+        std::path::PathBuf::from(dir).join("roleman").join("config.toml")
+    } else if let Ok(home) = std::env::var("HOME") {
+        std::path::PathBuf::from(home).join(".config").join("roleman").join("config.toml")
+    } else {
+        std::path::PathBuf::from("roleman-config.toml")
+    }
+}
+
+fn prompt_yes_no(prompt: &str) -> bool {
+    use std::io::{self, Write};
+    let mut stdout = io::stdout();
+    if stdout.write_all(prompt.as_bytes()).is_err() {
+        return false;
+    }
+    if stdout.flush().is_err() {
+        return false;
+    }
+    let mut input = String::new();
+    if io::stdin().read_line(&mut input).is_err() {
+        return false;
+    }
+    matches!(input.trim().to_lowercase().as_str(), "y" | "yes")
+}
+
+fn has_active_hook(contents: &str, install_line: &str) -> bool {
+    contents.lines().any(|line| {
+        let trimmed = line.trim_start();
+        if trimmed.is_empty() || trimmed.starts_with('#') {
+            return false;
+        }
+        trimmed.contains("_ROLEMAN_HOOK_VERSION")
+            || trimmed.contains("_ROLEMAN_HOOK_ENV")
+            || trimmed.contains(install_line)
+    })
+}
+
+fn hook_prompt_mode(config: &Config) -> HookPromptMode {
+    if let Some(mode) = config.hook_prompt {
+        return mode;
+    }
+    match config.prompt_for_hook {
+        Some(false) => HookPromptMode::Never,
+        _ => HookPromptMode::Always,
+    }
 }

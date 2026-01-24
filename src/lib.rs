@@ -1,6 +1,6 @@
 mod aws_config;
 pub mod aws_sdk;
-mod config;
+pub mod config;
 mod credentials_cache;
 mod error;
 mod model;
@@ -8,9 +8,10 @@ mod mock_server;
 mod roles_cache;
 mod sso_cache;
 mod tui;
-mod ui;
+pub mod ui;
 
-use crate::config::{Config, SsoIdentity};
+pub use crate::config::Config;
+use crate::config::SsoIdentity;
 pub use crate::error::{Error, Result};
 pub use crate::mock_server::{run_mock_server, start_mock_server, MockServerHandle, MockServerOptions};
 use crate::model::{EnvVars, RoleChoice};
@@ -204,12 +205,6 @@ fn env_file_path(options: &AppOptions) -> Option<PathBuf> {
     if let Ok(path) = std::env::var("_ROLEMAN_HOOK_ENV")
         && !path.is_empty()
     {
-        if std::env::var("_ROLEMAN_HOOK_VERSION").is_err() {
-            eprintln!(
-                "{}",
-                ui::warn("Detected an outdated shell hook. Reload your shell to update it.")
-            );
-        }
         let path = PathBuf::from(path);
         tracing::debug!(path = %path.display(), "using env file from _ROLEMAN_HOOK_ENV");
         return Some(path);

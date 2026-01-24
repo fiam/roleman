@@ -11,6 +11,16 @@ pub struct Config {
     pub identities: Vec<SsoIdentity>,
     pub default_identity: Option<String>,
     pub refresh_seconds: Option<u64>,
+    pub prompt_for_hook: Option<bool>,
+    pub hook_prompt: Option<HookPromptMode>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum HookPromptMode {
+    Always,
+    Never,
+    Outdated,
 }
 
 impl Config {
@@ -98,6 +108,8 @@ mod tests {
             }],
             default_identity: Some("work".into()),
             refresh_seconds: Some(120),
+            prompt_for_hook: None,
+            hook_prompt: None,
         };
 
         config.save(&path).unwrap();

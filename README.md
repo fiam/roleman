@@ -96,6 +96,7 @@ Config lives at `~/.config/roleman/config.toml` and uses TOML.
 ```toml
 default_identity = "work"
 refresh_seconds = 300
+hook_prompt = "always"
 
 [[identities]]
 name = "work"
@@ -116,6 +117,7 @@ Notes:
 - If multiple accounts are configured and no default is set, Roleman prompts to choose one.
 - Use `--account <name>` to select a non-default identity.
 - Use `--show-all` to ignore all filters temporarily.
+- `hook_prompt` controls hook prompts: `always` (default), `outdated` (only warn about upgrades), or `never`.
 
 ## Shell Hook (zsh, bash)
 
