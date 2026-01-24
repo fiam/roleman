@@ -26,7 +26,7 @@ cargo release patch
 
 The `cargo release` command bumps the version, tags `vX.Y.Z`, and prepares the release for CI.
 
-Enable the zsh hook so `roleman` updates the current shell:
+Enable the zsh or bash hook so `roleman` updates the current shell:
 
 ```sh
 eval "$(roleman hook zsh)"
@@ -74,7 +74,7 @@ The mock server serves a fixed set of accounts/roles and returns fake credential
 roleman [--sso-start-url <url>] [--sso-region <region>] [--account <name>] [--no-cache] [--show-all] [--refresh-seconds <n>] [--env-file <path>] [--print] [--config <path>]
 roleman set|s [--account <name>]
 roleman open|o [--account <name>]
-roleman hook zsh
+roleman hook zsh|bash
 roleman unset|u
 ```
 
@@ -110,7 +110,7 @@ Notes:
 - Use `--account <name>` to select a non-default identity.
 - Use `--show-all` to ignore all filters temporarily.
 
-## Shell Hook (zsh)
+## Shell Hook (zsh, bash)
 
 Install the hook (prints a snippet that updates `_ROLEMAN_HOOK_ENV`):
 
@@ -118,7 +118,7 @@ Install the hook (prints a snippet that updates `_ROLEMAN_HOOK_ENV`):
 eval "$(roleman hook zsh)"
 ```
 
-Paste it into `~/.zshrc`, then reload your shell.
+Paste it into your shell config (`~/.zshrc` or `~/.bashrc`), then reload your shell.
 
 ## Releases
 
