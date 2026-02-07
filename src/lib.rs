@@ -1,3 +1,4 @@
+mod aws_cli;
 mod aws_config;
 pub mod aws_sdk;
 pub mod config;
@@ -56,12 +57,10 @@ impl App {
         let config_exists = config_path.exists();
         let identity = resolve_identity(&self.options, &mut config, &config_path, config_exists)?;
         let start_url = identity.start_url.clone();
-        let sso_region = Some(identity.sso_region.clone());
         let refresh_seconds = self.options.refresh_seconds.or(config.refresh_seconds);
 
         let (mut cache, mut choices) =
-            fetch_choices_with_cache(&start_url, sso_region.as_deref(), self.options.ignore_cache)
-                .await?;
+            fetch_choices_with_cache(&identity, self.options.ignore_cache).await?;
 
         if !self.options.show_all {
             apply_account_filters(&mut choices, &identity);
@@ -74,12 +73,8 @@ impl App {
         {
             loop {
                 tokio::time::sleep(std::time::Duration::from_secs(seconds)).await;
-                let (refreshed_cache, refreshed) = fetch_choices_with_cache(
-                    &start_url,
-                    sso_region.as_deref(),
-                    self.options.ignore_cache,
-                )
-                .await?;
+                let (refreshed_cache, refreshed) =
+                    fetch_choices_with_cache(&identity, self.options.ignore_cache).await?;
                 cache = refreshed_cache;
                 visible = refreshed;
                 if !self.options.show_all {
@@ -149,11 +144,8 @@ impl App {
                         fresh
                     };
                     let profile_name = aws_config::profile_name_for(&choice);
-                    let config_path =
-                        aws_config::ensure_profile_region(&profile_name, &cache.region)?;
-                    let mut env =
-                        EnvVars::from_role_credentials(&creds, &profile_name, &cache.region);
-                    env.config_file = Some(config_path.display().to_string());
+                    aws_config::ensure_role_profile(&choice, &identity, &cache.region)?;
+                    let env = EnvVars::from_role_credentials(&creds, &profile_name, &cache.region);
                     if let Some(path) = env_file_path(&self.options) {
                         tracing::debug!(path = %path.display(), "writing env file");
                         write_env_file(&path, &env)?;
@@ -216,13 +208,14 @@ fn env_file_path(options: &AppOptions) -> Option<PathBuf> {
 }
 
 async fn fetch_choices_with_cache(
-    start_url: &str,
-    sso_region: Option<&str>,
+    identity: &SsoIdentity,
     ignore_cache: bool,
 ) -> Result<(crate::model::CacheEntry, Vec<RoleChoice>)> {
-    let cache = cache_token(start_url, sso_region, ignore_cache).await?;
+    let cache = cache_token(identity, ignore_cache).await?;
     let mut cached_fallback: Option<(Vec<RoleChoice>, std::time::Duration)> = None;
-    if !ignore_cache && let Some((choices, age)) = roles_cache::load_cached_roles(start_url)? {
+    if !ignore_cache
+        && let Some((choices, age)) = roles_cache::load_cached_roles(&identity.start_url)?
+    {
         eprintln!(
             "{}",
             ui::info(&format!(
@@ -233,7 +226,8 @@ async fn fetch_choices_with_cache(
         return Ok((cache, choices));
     }
     if !ignore_cache
-        && let Some((choices, age)) = roles_cache::load_cached_roles_with_age(start_url)?
+        && let Some((choices, age)) =
+            roles_cache::load_cached_roles_with_age(&identity.start_url)?
     {
         cached_fallback = Some((choices, age));
     }
@@ -304,20 +298,41 @@ async fn fetch_choices_with_cache(
         }
     }
 
-    roles_cache::save_cached_roles(start_url, &choices)?;
+    roles_cache::save_cached_roles(&identity.start_url, &choices)?;
     Ok((cache, choices))
 }
 
 async fn cache_token(
-    start_url: &str,
-    sso_region: Option<&str>,
+    identity: &SsoIdentity,
     ignore_cache: bool,
 ) -> Result<crate::model::CacheEntry> {
-    if !ignore_cache && let Ok(entry) = sso_cache::load_valid_cache(start_url) {
+    let ignore_sso_cache = env_truthy("ROLEMAN_IGNORE_SSO_CACHE");
+    if !ignore_cache
+        && !ignore_sso_cache
+        && let Ok(entry) = sso_cache::load_valid_cache(&identity.start_url)
+    {
         return Ok(entry);
     }
-    let region = sso_region.ok_or(Error::MissingRegion)?;
-    sso_cache::device_authorization(start_url, region).await
+    if ignore_sso_cache {
+        eprintln!(
+            "{}",
+            ui::info("Ignoring cached SSO token due to ROLEMAN_IGNORE_SSO_CACHE.")
+        );
+    }
+    let session = aws_config::ensure_sso_session(identity)?;
+    aws_cli::sso_login_session(&session)?;
+    sso_cache::load_valid_cache(&identity.start_url)
+}
+
+fn env_truthy(key: &str) -> bool {
+    let value = match std::env::var(key) {
+        Ok(value) => value,
+        Err(_) => return false,
+    };
+    matches!(
+        value.trim().to_lowercase().as_str(),
+        "1" | "true" | "yes" | "on"
+    )
 }
 
 #[cfg(test)]

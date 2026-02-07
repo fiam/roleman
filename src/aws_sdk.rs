@@ -3,14 +3,11 @@ use aws_sdk_sso::types::{AccountInfo, RoleInfo};
 use aws_smithy_runtime_api::client::result::SdkError as SmithySdkError;
 use aws_smithy_runtime_api::http::Response as SmithyResponse;
 use aws_smithy_types::error::metadata::ProvideErrorMetadata;
-use aws_types::SdkConfig;
 use aws_types::request_id::RequestId;
+use aws_types::SdkConfig;
 
 use crate::error::{Error, Result};
-use crate::model::{
-    Account, AwsCreateToken, AwsRegisterClient, AwsRoleCredentials, AwsStartDeviceAuthorization,
-    Role,
-};
+use crate::model::{Account, AwsRoleCredentials, Role};
 
 pub async fn sdk_config(region: &str) -> Result<SdkConfig> {
     let region = Region::new(region.to_string());
@@ -18,17 +15,6 @@ pub async fn sdk_config(region: &str) -> Result<SdkConfig> {
         .region(region)
         .load()
         .await)
-}
-
-async fn ssooidc_client(region: &str) -> Result<aws_sdk_ssooidc::Client> {
-    let config = sdk_config(region).await?;
-    let mut builder = aws_sdk_ssooidc::config::Builder::from(&config);
-    if let Ok(url) = std::env::var("ROLEMAN_SSOOIDC_ENDPOINT") {
-        if !url.is_empty() {
-            builder = builder.endpoint_url(url);
-        }
-    }
-    Ok(aws_sdk_ssooidc::Client::from_conf(builder.build()))
 }
 
 async fn sso_client(region: &str) -> Result<aws_sdk_sso::Client> {
@@ -40,89 +26,6 @@ async fn sso_client(region: &str) -> Result<aws_sdk_sso::Client> {
         }
     }
     Ok(aws_sdk_sso::Client::from_conf(builder.build()))
-}
-
-pub async fn register_client(region: &str) -> Result<AwsRegisterClient> {
-    let client = ssooidc_client(region).await?;
-    let output = client
-        .register_client()
-        .client_name("roleman")
-        .client_type("public")
-        .send()
-        .await
-        .map_err(|err| Error::AwsSdk(format_sdk_error(&err)))?;
-
-    Ok(AwsRegisterClient {
-        client_id: output
-            .client_id()
-            .ok_or_else(|| Error::AwsSdk("missing client_id".into()))?
-            .to_string(),
-        client_secret: output
-            .client_secret()
-            .ok_or_else(|| Error::AwsSdk("missing client_secret".into()))?
-            .to_string(),
-        client_secret_expires_at: output.client_secret_expires_at(),
-    })
-}
-
-pub async fn start_device_authorization(
-    region: &str,
-    client_id: &str,
-    client_secret: &str,
-    start_url: &str,
-) -> Result<AwsStartDeviceAuthorization> {
-    let client = ssooidc_client(region).await?;
-    let output = client
-        .start_device_authorization()
-        .client_id(client_id)
-        .client_secret(client_secret)
-        .start_url(start_url)
-        .send()
-        .await
-        .map_err(|err| Error::AwsSdk(format_sdk_error(&err)))?;
-
-    Ok(AwsStartDeviceAuthorization {
-        device_code: output
-            .device_code()
-            .ok_or_else(|| Error::AwsSdk("missing device_code".into()))?
-            .to_string(),
-        user_code: output
-            .user_code()
-            .ok_or_else(|| Error::AwsSdk("missing user_code".into()))?
-            .to_string(),
-        verification_uri_complete: output
-            .verification_uri_complete()
-            .ok_or_else(|| Error::AwsSdk("missing verification_uri_complete".into()))?
-            .to_string(),
-        expires_in: output.expires_in() as u64,
-        interval: output.interval() as u64,
-    })
-}
-
-pub async fn create_token(
-    region: &str,
-    client_id: &str,
-    client_secret: &str,
-    device_code: &str,
-) -> Result<AwsCreateToken> {
-    let client = ssooidc_client(region).await?;
-    let output = client
-        .create_token()
-        .client_id(client_id)
-        .client_secret(client_secret)
-        .device_code(device_code)
-        .grant_type("urn:ietf:params:oauth:grant-type:device_code")
-        .send()
-        .await
-        .map_err(|err| Error::AwsSdk(format_sdk_error(&err)))?;
-
-    Ok(AwsCreateToken {
-        access_token: output
-            .access_token()
-            .ok_or_else(|| Error::AwsSdk("missing access_token".into()))?
-            .to_string(),
-        expires_in: output.expires_in() as u64,
-    })
 }
 
 pub async fn list_accounts(access_token: &str, region: &str) -> Result<Vec<Account>> {
