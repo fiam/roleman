@@ -39,7 +39,9 @@
 - Name tests descriptively, e.g., `parses_sso_cache` or `rejects_empty_input`.
 
 ## Commit & Pull Request Guidelines
-- No explicit commit message convention is established in this repo; use short, imperative summaries (e.g., "Add config parser").
+- Always check formatting before committing (e.g., run `cargo fmt --check`).
+- Always use Conventional Commits for commit messages.
+- Write a medium-length commit body with every commit message.
 - PRs should include a clear description of changes, how to test, and any relevant screenshots or logs if behavior changes.
 
 ## Configuration & UX Notes
