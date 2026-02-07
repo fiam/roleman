@@ -2,6 +2,9 @@ use std::borrow::Cow;
 use std::sync::Arc;
 
 use skim::prelude::*;
+use skim::tui::event::Action;
+use skim::tui::options::TuiLayout;
+use skim::tui::statusline::InfoDisplay;
 use tracing::{debug, trace};
 
 use crate::aws_config;
@@ -50,19 +53,23 @@ pub fn select_role(
     let height_lines = std::cmp::min(ordered.len().saturating_add(3), max_height);
     let height = format!("{height_lines}");
     let options = SkimOptionsBuilder::default()
-        .height(Some(height.as_str()))
+        .height(height)
         .multi(false)
-        .prompt(Some(prompt))
-        .bind(vec!["ctrl-c:abort", "ctrl-o:accept"])
-        .expect(Some("ctrl-o".to_string()))
-        .layout("default")
+        .prompt(prompt.to_string())
+        .info(InfoDisplay::Hidden)
+        .bind(vec![
+            "ctrl-c:abort".to_string(),
+            "ctrl-o:accept(ctrl-o)".to_string(),
+        ])
+        .layout(TuiLayout::Default)
+        .sync(true)
         .tac(false)
         .reverse(false)
-        .nosort(true)
+        .no_sort(true)
         .build()
         .map_err(|err| Error::Tui(err.to_string()))?;
 
-    let (selected, open_in_browser) = run_skim(&options, &ordered, start_url, region)?;
+    let (selected, open_in_browser) = run_skim(options, &ordered, start_url, region)?;
 
     if selected.is_empty() {
         debug!("no role selected");
@@ -76,7 +83,7 @@ pub fn select_role(
 }
 
 fn run_skim(
-    options: &SkimOptions,
+    options: SkimOptions,
     choices: &[RoleChoice],
     start_url: &str,
     region: &str,
@@ -116,25 +123,26 @@ fn run_skim(
     }
 
     let (tx, rx): (SkimItemSender, SkimItemReceiver) = unbounded();
-    for item in items {
-        if tx.send(item).is_err() {
-            break;
-        }
+    if tx.send(items).is_err() {
+        return Ok((Vec::new(), false));
     }
     drop(tx);
 
     let (selected, open_in_browser) = match Skim::run_with(options, Some(rx)) {
-        Some(out) => {
+        Ok(out) => {
             debug!(is_abort = out.is_abort, "skim run completed");
             if out.is_abort {
                 (Vec::new(), false)
             } else {
-                (out.selected_items, matches!(out.final_key, Key::Ctrl('o')))
+                let open_in_browser = matches!(
+                    &out.final_event,
+                    Event::Action(Action::Accept(Some(key))) if key == "ctrl-o"
+                );
+                (out.selected_items, open_in_browser)
             }
         }
-        None => {
-            debug!("skim returned no output");
-            (Vec::new(), false)
+        Err(err) => {
+            return Err(Error::Tui(err.to_string()));
         }
     };
     debug!(
