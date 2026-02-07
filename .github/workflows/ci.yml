@@ -29,5 +29,10 @@ jobs:
       - name: Clippy
         run: cargo clippy -- -D warnings
 
+      - name: Cargo deny
+        uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          command: check advisories bans sources
+
       - name: Test
         run: cargo test
