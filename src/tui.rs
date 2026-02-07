@@ -90,11 +90,26 @@ fn run_skim(
 ) -> Result<(Vec<RoleChoice>, bool)> {
     trace!(count = choices.len(), "preparing skim items");
     let current_profile = std::env::var("AWS_PROFILE").ok();
+    let mut roles_per_account: std::collections::HashMap<&str, usize> =
+        std::collections::HashMap::new();
+    for choice in choices {
+        *roles_per_account
+            .entry(choice.account_id.as_str())
+            .or_insert(0) += 1;
+    }
     let mut lookup = std::collections::HashMap::new();
     let mut items = Vec::with_capacity(choices.len());
     for choice in choices {
+        let omit_role_name = roles_per_account
+            .get(choice.account_id.as_str())
+            .copied()
+            .unwrap_or(0)
+            == 1;
+        let active_profile = aws_config::profile_name_for(choice, omit_role_name);
+        // Keep matching legacy profile names to preserve the active marker after upgrades.
+        let legacy_profile = aws_config::profile_name_for(choice, false);
         let label = if let Some(profile) = current_profile.as_deref() {
-            let prefix = if aws_config::profile_name_for(choice) == profile {
+            let prefix = if profile == active_profile || profile == legacy_profile {
                 let status = match credentials_cache::cached_credentials_status(
                     start_url,
                     region,
