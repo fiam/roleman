@@ -20,10 +20,10 @@ pub async fn sdk_config(region: &str) -> Result<SdkConfig> {
 async fn sso_client(region: &str) -> Result<aws_sdk_sso::Client> {
     let config = sdk_config(region).await?;
     let mut builder = aws_sdk_sso::config::Builder::from(&config);
-    if let Ok(url) = std::env::var("ROLEMAN_SSO_ENDPOINT") {
-        if !url.is_empty() {
-            builder = builder.endpoint_url(url);
-        }
+    if let Ok(url) = std::env::var("ROLEMAN_SSO_ENDPOINT")
+        && !url.is_empty()
+    {
+        builder = builder.endpoint_url(url);
     }
     Ok(aws_sdk_sso::Client::from_conf(builder.build()))
 }

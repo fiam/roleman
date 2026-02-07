@@ -12,6 +12,7 @@
 - `cargo build` — compile the project in debug mode.
 - `cargo build --release` — produce an optimized release binary.
 - `cargo test` — run all unit and integration tests.
+- `cargo clippy -- -D warnings` — run Clippy and fail on any warning.
 - `cargo run -- --no-cache` — force SSO sign-in instead of using cached tokens.
 - `cargo run -- --show-all` — ignore any account/role filters configured for the selected account.
 - `cargo run -- hook zsh` — print the zsh hook snippet for env updates.
@@ -40,6 +41,7 @@
 
 ## Commit & Pull Request Guidelines
 - Always check formatting before committing (e.g., run `cargo fmt --check`).
+- Always run `cargo clippy -- -D warnings` before committing.
 - Always use Conventional Commits for commit messages.
 - Write a medium-length commit body with every commit message.
 - PRs should include a clear description of changes, how to test, and any relevant screenshots or logs if behavior changes.

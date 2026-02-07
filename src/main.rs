@@ -260,7 +260,7 @@ fn install_hook(force: bool, alias: bool) -> Result<(), String> {
         contents = remove_hook_lines(&contents);
     }
     let mut block = String::new();
-    block.push_str("\n");
+    block.push('\n');
     block.push_str(&install_line);
     if alias {
         block.push('\n');

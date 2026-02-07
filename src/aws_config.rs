@@ -120,8 +120,8 @@ fn ensure_section_entries(section: &str, entries: &[(&str, &str)]) -> Result<()>
         let end = end.unwrap_or(lines.len());
         let mut key_lines: HashMap<String, usize> = HashMap::new();
         let mut key_values: HashMap<String, String> = HashMap::new();
-        for idx in (start + 1)..end {
-            if let Some((key, value)) = parse_key_value(&lines[idx]) {
+        for (idx, line) in lines.iter().enumerate().take(end).skip(start + 1) {
+            if let Some((key, value)) = parse_key_value(line) {
                 key_lines.insert(key.clone(), idx);
                 key_values.insert(key, value);
             }
@@ -167,7 +167,7 @@ fn ensure_section_entries(section: &str, entries: &[(&str, &str)]) -> Result<()>
 
         let missing = entries
             .iter()
-            .filter(|(key, _)| !key_lines.contains_key(&key.to_string()))
+            .filter(|(key, _)| !key_lines.contains_key(*key))
             .map(|(key, value)| format!("{key} = {value}"))
             .collect::<Vec<_>>();
         if !missing.is_empty() {
