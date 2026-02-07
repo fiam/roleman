@@ -1,97 +1,131 @@
 # roleman
 
-Roleman is a Rust CLI that uses AWS SSO to select an account/role and set shell environment variables so the AWS CLI works without writing credentials to disk.
+Roleman is a Rust CLI for AWS IAM Identity Center (AWS SSO).
+It lets you choose an account and role, then exports temporary AWS env vars into your shell.
 
-## Quick Start
+## Getting Started
 
-Build and run:
+### 1. Install roleman
+
+#### Homebrew (recommended)
 
 ```sh
-cargo run -- --sso-start-url https://acme.awsapps.com/start --sso-region us-east-1
+brew tap fiam/roleman
+brew install fiam/roleman/roleman
 ```
 
-Install from source:
+#### GitHub Releases
+
+1. Download the archive for your OS/CPU from [Releases](https://github.com/fiam/roleman/releases).
+2. Extract it.
+3. Move `roleman` into your `PATH`.
+
+Example:
+
+```sh
+tar -xzf roleman-<target>.tar.gz
+chmod +x roleman
+sudo mv roleman /usr/local/bin/roleman
+```
+
+#### Build from source
 
 ```sh
 cargo install --path .
 ```
 
-Release tooling:
+### 2. Enable the shell hook (required)
 
-```sh
-cargo install cargo-release
-cargo install cargo-dist
-cargo release patch
-```
+Roleman updates your current shell through a hook file. Supported shells: zsh and bash.
 
-The `cargo release` command bumps the version, tags `vX.Y.Z`, and prepares the release for CI.
-
-Enable the zsh or bash hook so `roleman` updates the current shell:
+Quick test in the current shell:
 
 ```sh
 eval "$(roleman hook zsh)"
 ```
 
-Or install it automatically:
+Install permanently into your shell rc file (`~/.zshrc` or `~/.bashrc`):
 
 ```sh
 roleman install-hook
 ```
 
-Then just run:
+Optional alias:
 
 ```sh
-roleman --sso-start-url https://acme.awsapps.com/start --sso-region us-east-1
+roleman install-hook --alias
 ```
 
-To unset all roleman AWS env vars:
+Reload your shell after installing:
 
 ```sh
-roleman unset
+source ~/.zshrc
 ```
 
-To open the selected account/role in the AWS access portal:
+### 3. Configure your SSO identity
+
+Create `~/.config/roleman/config.toml`:
+
+```toml
+default_identity = "work"
+
+[[identities]]
+name = "work"
+start_url = "https://acme.awsapps.com/start"
+sso_region = "us-east-1"
+```
+
+Now run:
+
+```sh
+roleman
+```
+
+On first run, Roleman uses device auth if needed, lets you pick an account/role, and exports AWS env vars.
+
+## Daily Usage
+
+Set credentials by picking an account/role:
+
+```sh
+roleman
+# or
+roleman set
+```
+
+Open the selected role directly in the AWS access portal:
 
 ```sh
 roleman open
 ```
 
-## Mock Server
-
-For demos or end-to-end tests, run a local mock server that simulates AWS SSO:
+Clear Roleman-managed AWS env vars:
 
 ```sh
-roleman-mock-server --port 7777
+roleman unset
 ```
 
-Then point Roleman at it:
+Force a fresh SSO flow and skip cache:
 
 ```sh
-export ROLEMAN_SSO_ENDPOINT=http://127.0.0.1:7777/sso
-export ROLEMAN_SSOOIDC_ENDPOINT=http://127.0.0.1:7777/ssooidc
-roleman --sso-start-url https://mock.awsapps.com/start --sso-region us-east-1
+roleman --no-cache
 ```
 
-The mock server serves a fixed set of accounts/roles and returns fake credentials.
+Temporarily ignore configured account/role filters:
 
-## Usage
-
-```
-roleman [--sso-start-url <url>] [--sso-region <region>] [--account <name>] [--no-cache] [--show-all] [--refresh-seconds <n>] [--env-file <path>] [--print] [--config <path>]
-roleman set|s [--account <name>]
-roleman open|o [--account <name>]
-roleman hook zsh|bash
-roleman install-hook [--force] [--alias]
-roleman unset|u
+```sh
+roleman --show-all
 ```
 
-```
-roleman-mock-server [--port <port>]
+Use a non-default configured identity:
+
+```sh
+roleman --account prod
 ```
 
-## Config
+## Configuration
 
-Config lives at `~/.config/roleman/config.toml` and uses TOML.
+Path: `~/.config/roleman/config.toml`
 
 ```toml
 default_identity = "work"
@@ -102,10 +136,8 @@ hook_prompt = "always"
 name = "work"
 start_url = "https://acme.awsapps.com/start"
 sso_region = "us-east-1"
-
 ignore_roles = ["ReadOnly"]
 
-# Per-AWS-account rules
 accounts = [
   { account_id = "123456789012", alias = "Platform", precedence = 10 },
   { account_id = "999999999999", ignored = true },
@@ -114,62 +146,44 @@ accounts = [
 ```
 
 Notes:
-- If multiple accounts are configured and no default is set, Roleman prompts to choose one.
-- Use `--account <name>` to select a non-default identity.
-- Use `--show-all` to ignore all filters temporarily.
-- `hook_prompt` controls hook prompts: `always` (default), `outdated` (only warn about upgrades), or `never`.
+- Higher `precedence` appears first.
+- `hook_prompt` values: `always`, `outdated`, `never`.
+- Use `--show-all` to bypass account/role filters for one run.
 
-## Shell Hook (zsh, bash)
+## Command Reference
 
-Install the hook (prints a snippet that updates `_ROLEMAN_HOOK_ENV`):
-
-```sh
-eval "$(roleman hook zsh)"
-```
-
-Paste it into your shell config (`~/.zshrc` or `~/.bashrc`), then reload your shell.
-
-You can also install automatically (appends to your shell startup file):
-
-```sh
-roleman install-hook
-```
-
-## Releases
-
-Roleman uses `cargo-dist` to build release artifacts on tag pushes. To create a release:
-
-```sh
-cargo release patch
-git push --follow-tags
-```
-
-The GitHub Action uploads builds and generates the release artifacts automatically.
-
-## Homebrew Tap
-
-The release workflow can publish a Homebrew formula. Configure the tap and enable the Homebrew publish job in `Cargo.toml` under `[workspace.metadata.dist]` (default: `fiam/homebrew-roleman`) and create the repository if it doesn't exist.
-
-Install with:
-
-```sh
-brew install fiam/roleman/roleman
-```
-
-After each release, update the tap formula to point at the new GitHub release artifact and checksum.
-
-After installing via Homebrew, enable the shell hook:
-
-```sh
-eval "$(roleman hook zsh)"
+```text
+roleman [--sso-start-url <url>] [--sso-region <region>] [--account <name>] [--no-cache] [--show-all] [--refresh-seconds <n>] [--env-file <path>] [--print] [--config <path>]
+roleman set|s [--account <name>]
+roleman open|o [--account <name>]
+roleman <sso-start-url>
+roleman hook zsh|bash
+roleman install-hook [--force] [--alias]
+roleman unset|u
 ```
 
 ## Troubleshooting
 
-Enable trace logging to a file:
+Enable trace logs to a file (recommended because the selector UI redraws the terminal):
 
 ```sh
 ROLEMAN_LOG_FILE=/tmp/roleman.log RUST_LOG=roleman=trace roleman --sso-start-url https://acme.awsapps.com/start --sso-region us-east-1
 ```
 
-Check the log for selection and env file write events.
+If you see hook warnings, reload your shell:
+
+```sh
+source ~/.zshrc
+# or
+source ~/.bashrc
+```
+
+## Development
+
+```sh
+cargo run -- --help
+cargo build
+cargo test
+cargo clippy -- -D warnings
+cargo deny check advisories bans sources
+```
