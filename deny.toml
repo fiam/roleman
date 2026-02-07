@@ -1,0 +1,52 @@
+[graph]
+all-features = true
+
+[advisories]
+db-path = "target/advisory-db"
+db-urls = ["https://github.com/RustSec/advisory-db"]
+ignore = []
+
+[bans]
+multiple-versions = "deny"
+wildcards = "allow"
+highlight = "all"
+workspace-default-features = "allow"
+external-default-features = "allow"
+deny = []
+skip = [
+    { name = "bitflags", version = "*" },
+    { name = "cfg_aliases", version = "*" },
+    { name = "darling", version = "*" },
+    { name = "darling_core", version = "*" },
+    { name = "darling_macro", version = "*" },
+    { name = "getrandom", version = "*" },
+    { name = "h2", version = "*" },
+    { name = "http", version = "*" },
+    { name = "http-body", version = "*" },
+    { name = "hyper", version = "*" },
+    { name = "hyper-rustls", version = "*" },
+    { name = "nix", version = "*" },
+    { name = "rustls", version = "*" },
+    { name = "rustls-webpki", version = "*" },
+    { name = "socket2", version = "*" },
+    { name = "thiserror", version = "*" },
+    { name = "thiserror-impl", version = "*" },
+    { name = "tokio-rustls", version = "*" },
+    { name = "windows-sys", version = "*" },
+    { name = "windows-targets", version = "*" },
+    { name = "windows_aarch64_gnullvm", version = "*" },
+    { name = "windows_aarch64_msvc", version = "*" },
+    { name = "windows_i686_gnu", version = "*" },
+    { name = "windows_i686_gnullvm", version = "*" },
+    { name = "windows_i686_msvc", version = "*" },
+    { name = "windows_x86_64_gnu", version = "*" },
+    { name = "windows_x86_64_gnullvm", version = "*" },
+    { name = "windows_x86_64_msvc", version = "*" },
+]
+skip-tree = []
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "warn"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = []
