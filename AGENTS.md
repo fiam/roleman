@@ -13,6 +13,7 @@
 - `cargo build --release` — produce an optimized release binary.
 - `cargo test` — run all unit and integration tests.
 - `cargo clippy -- -D warnings` — run Clippy and fail on any warning.
+- `cargo deny check advisories bans sources` — run dependency/security policy checks from `deny.toml`.
 - `cargo run -- --no-cache` — force SSO sign-in instead of using cached tokens.
 - `cargo run -- --show-all` — ignore any account/role filters configured for the selected account.
 - `cargo run -- hook zsh` — print the zsh hook snippet for env updates.
@@ -20,7 +21,7 @@
 - `cargo run -- --print` — print env exports to stdout (default is hook-only).
 - `cargo run -- open` — open the selected account/role in the AWS access portal.
 - `cargo run -- unset` — print an `unset` line to clear roleman environment variables.
-- `roleman-mock-server --port 7777` — run a local mock AWS SSO server for demos and E2E tests.
+- `cargo test --test e2e` — run integration tests that spin up the in-process mock AWS SSO server.
 - `cargo release patch` — bump version, tag release, and prepare CI release artifacts.
 - `cargo dist build` — build distribution artifacts locally (requires `cargo install cargo-dist`).
 
@@ -42,6 +43,7 @@
 ## Commit & Pull Request Guidelines
 - Always check formatting before committing (e.g., run `cargo fmt --check`).
 - Always run `cargo clippy -- -D warnings` before committing.
+- Always run `cargo deny check advisories bans sources` before committing.
 - Always use Conventional Commits for commit messages.
 - Write a medium-length commit body with every commit message.
 - PRs should include a clear description of changes, how to test, and any relevant screenshots or logs if behavior changes.
