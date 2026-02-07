@@ -10,7 +10,6 @@ It lets you choose an account and role, then exports temporary AWS env vars into
 #### Homebrew (recommended)
 
 ```sh
-brew tap fiam/roleman
 brew install fiam/roleman/roleman
 ```
 
@@ -23,7 +22,7 @@ brew install fiam/roleman/roleman
 Example:
 
 ```sh
-tar -xzf roleman-<target>.tar.gz
+tar -xJf roleman-<target>.tar.xz
 chmod +x roleman
 sudo mv roleman /usr/local/bin/roleman
 ```
@@ -38,17 +37,19 @@ cargo install --path .
 
 Roleman updates your current shell through a hook file. Supported shells: zsh and bash.
 
-Quick test in the current shell:
-
-```sh
-eval "$(roleman hook zsh)"
-```
-
-Install permanently into your shell rc file (`~/.zshrc` or `~/.bashrc`):
+Recommended (installs into your shell rc file):
 
 ```sh
 roleman install-hook
 ```
+
+Optional one-off test in the current shell:
+
+```sh
+eval "$(roleman hook <shell>)"
+```
+
+Replace `<shell>` with your shell name (currently `zsh` or `bash`).
 
 Optional alias:
 
@@ -59,7 +60,7 @@ roleman install-hook --alias
 Reload your shell after installing:
 
 ```sh
-source ~/.zshrc
+exec "$SHELL" -l
 ```
 
 ### 3. Configure your SSO identity
@@ -173,9 +174,7 @@ ROLEMAN_LOG_FILE=/tmp/roleman.log RUST_LOG=roleman=trace roleman --sso-start-url
 If you see hook warnings, reload your shell:
 
 ```sh
-source ~/.zshrc
-# or
-source ~/.bashrc
+exec "$SHELL" -l
 ```
 
 ## Development
