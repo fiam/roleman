@@ -3,8 +3,8 @@ use aws_sdk_sso::types::{AccountInfo, RoleInfo};
 use aws_smithy_runtime_api::client::result::SdkError as SmithySdkError;
 use aws_smithy_runtime_api::http::Response as SmithyResponse;
 use aws_smithy_types::error::metadata::ProvideErrorMetadata;
-use aws_types::request_id::RequestId;
 use aws_types::SdkConfig;
+use aws_types::request_id::RequestId;
 
 use crate::error::{Error, Result};
 use crate::model::{Account, AwsRoleCredentials, Role};

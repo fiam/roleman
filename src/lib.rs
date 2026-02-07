@@ -226,8 +226,7 @@ async fn fetch_choices_with_cache(
         return Ok((cache, choices));
     }
     if !ignore_cache
-        && let Some((choices, age)) =
-            roles_cache::load_cached_roles_with_age(&identity.start_url)?
+        && let Some((choices, age)) = roles_cache::load_cached_roles_with_age(&identity.start_url)?
     {
         cached_fallback = Some((choices, age));
     }
