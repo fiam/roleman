@@ -91,7 +91,7 @@ impl App {
             AppAction::Set => "roleman> ",
             AppAction::Open => "roleman open> ",
         };
-        let selected = tui::select_role(prompt, &visible, &start_url, &cache.region)?;
+        let selected = select_role_async(prompt, &visible, &start_url, &cache.region).await?;
         if let Some(selection) = selected {
             let choice = selection.choice;
             tracing::debug!(
@@ -205,6 +205,21 @@ fn env_file_path(options: &AppOptions) -> Option<PathBuf> {
     }
     tracing::debug!("no env file path configured");
     None
+}
+
+async fn select_role_async(
+    prompt: &str,
+    choices: &[RoleChoice],
+    start_url: &str,
+    region: &str,
+) -> Result<Option<tui::TuiSelection>> {
+    let prompt = prompt.to_string();
+    let choices = choices.to_vec();
+    let start_url = start_url.to_string();
+    let region = region.to_string();
+    tokio::task::spawn_blocking(move || tui::select_role(&prompt, &choices, &start_url, &region))
+        .await
+        .map_err(|err| Error::Tui(format!("failed to join tui task: {err}")))?
 }
 
 async fn fetch_choices_with_cache(
