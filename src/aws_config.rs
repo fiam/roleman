@@ -8,8 +8,11 @@ use crate::model::RoleChoice;
 
 const ROLEMAN_MANAGED_KEY: &str = "roleman_managed";
 
-pub fn profile_name_for(choice: &RoleChoice) -> String {
+pub fn profile_name_for(choice: &RoleChoice, omit_role_name: bool) -> String {
     let account = sanitize_component(&choice.account_name);
+    if omit_role_name {
+        return account;
+    }
     let role = sanitize_component(&choice.role_name);
     format!("{}/{}", account, role)
 }
@@ -25,11 +28,11 @@ pub fn ensure_sso_session(identity: &SsoIdentity) -> Result<String> {
 }
 
 pub fn ensure_role_profile(
+    profile_name: &str,
     choice: &RoleChoice,
     identity: &SsoIdentity,
     region: &str,
 ) -> Result<()> {
-    let profile = profile_name_for(choice);
     let session = sso_session_name(identity);
     let entries = vec![
         ("sso_session", session.as_str()),
@@ -38,7 +41,7 @@ pub fn ensure_role_profile(
         ("region", region),
         (ROLEMAN_MANAGED_KEY, "true"),
     ];
-    ensure_profile_entries(&profile, &entries)
+    ensure_profile_entries(profile_name, &entries)
 }
 
 fn sanitize_component(value: &str) -> String {
@@ -214,6 +217,17 @@ mod tests {
     }
 
     #[test]
+    fn omits_role_name_for_single_role_accounts() {
+        let choice = RoleChoice {
+            account_id: "1234".into(),
+            account_name: "Acme Cloud".into(),
+            role_name: "ReadOnly".into(),
+        };
+        assert_eq!(profile_name_for(&choice, true), "Acme-Cloud");
+        assert_eq!(profile_name_for(&choice, false), "Acme-Cloud/ReadOnly");
+    }
+
+    #[test]
     fn ensures_role_profile() {
         let _lock = crate::test_support::lock_env();
         let temp = TempDir::new().unwrap();
@@ -236,7 +250,8 @@ mod tests {
         };
         let session = ensure_sso_session(&identity).unwrap();
         assert_eq!(session, "roleman-work");
-        ensure_role_profile(&choice, &identity, "us-east-1").unwrap();
+        let profile_name = profile_name_for(&choice, false);
+        ensure_role_profile(&profile_name, &choice, &identity, "us-east-1").unwrap();
         let config_path = aws_config_path().unwrap();
         let contents = fs::read_to_string(config_path).unwrap();
         assert!(contents.contains("[sso-session roleman-work]"));

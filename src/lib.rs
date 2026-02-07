@@ -143,8 +143,15 @@ impl App {
                         tracing::debug!("role credentials received");
                         fresh
                     };
-                    let profile_name = aws_config::profile_name_for(&choice);
-                    aws_config::ensure_role_profile(&choice, &identity, &cache.region)?;
+                    let omit_role_name =
+                        has_single_role_for_account(&visible, &choice.account_id);
+                    let profile_name = aws_config::profile_name_for(&choice, omit_role_name);
+                    aws_config::ensure_role_profile(
+                        &profile_name,
+                        &choice,
+                        &identity,
+                        &cache.region,
+                    )?;
                     let env = EnvVars::from_role_credentials(&creds, &profile_name, &cache.region);
                     if let Some(path) = env_file_path(&self.options) {
                         tracing::debug!(path = %path.display(), "writing env file");
@@ -446,6 +453,31 @@ mod tests {
             "https://acme.awsapps.com/start/#/console?account_id=123456789012&role_name=Read%20Only"
         );
     }
+
+    #[test]
+    fn detects_accounts_with_single_role() {
+        let choices = vec![
+            RoleChoice {
+                account_id: "1111".into(),
+                account_name: "Acme".into(),
+                role_name: "ReadOnly".into(),
+            },
+            RoleChoice {
+                account_id: "2222".into(),
+                account_name: "Beta".into(),
+                role_name: "Admin".into(),
+            },
+            RoleChoice {
+                account_id: "2222".into(),
+                account_name: "Beta".into(),
+                role_name: "ReadOnly".into(),
+            },
+        ];
+
+        assert!(has_single_role_for_account(&choices, "1111"));
+        assert!(!has_single_role_for_account(&choices, "2222"));
+        assert!(!has_single_role_for_account(&choices, "3333"));
+    }
 }
 
 fn resolve_identity(
@@ -536,6 +568,15 @@ fn sort_choices(choices: &mut [RoleChoice], identity: &SsoIdentity) {
             choice.role_name.to_lowercase(),
         )
     });
+}
+
+fn has_single_role_for_account(choices: &[RoleChoice], account_id: &str) -> bool {
+    choices
+        .iter()
+        .filter(|choice| choice.account_id == account_id)
+        .take(2)
+        .count()
+        == 1
 }
 
 fn maybe_save_account(
