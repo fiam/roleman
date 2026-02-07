@@ -54,38 +54,6 @@ pub struct AwsRoleCredentials {
     pub expiration: u64,
 }
 
-#[derive(Debug, Deserialize)]
-pub struct AwsRegisterClient {
-    #[serde(rename = "clientId")]
-    pub client_id: String,
-    #[serde(rename = "clientSecret")]
-    pub client_secret: String,
-    #[serde(rename = "clientSecretExpiresAt")]
-    pub client_secret_expires_at: i64,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct AwsStartDeviceAuthorization {
-    #[serde(rename = "deviceCode")]
-    pub device_code: String,
-    #[serde(rename = "userCode")]
-    pub user_code: String,
-    #[serde(rename = "verificationUri")]
-    pub verification_uri_complete: String,
-    #[serde(rename = "expiresIn")]
-    pub expires_in: u64,
-    #[serde(rename = "interval")]
-    pub interval: u64,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct AwsCreateToken {
-    #[serde(rename = "accessToken")]
-    pub access_token: String,
-    #[serde(rename = "expiresIn")]
-    pub expires_in: u64,
-}
-
 #[derive(Debug, Clone)]
 pub struct EnvVars {
     pub access_key_id: String,
