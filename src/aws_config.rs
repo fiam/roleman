@@ -234,6 +234,8 @@ mod tests {
             account_name: "Acme Cloud".into(),
             role_name: "ReadOnly".into(),
         };
+        let session = ensure_sso_session(&identity).unwrap();
+        assert_eq!(session, "roleman-work");
         ensure_role_profile(&choice, &identity, "us-east-1").unwrap();
         let config_path = aws_config_path().unwrap();
         let contents = fs::read_to_string(config_path).unwrap();
