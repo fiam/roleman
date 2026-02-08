@@ -1,6 +1,6 @@
 [package]
 name = "roleman"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 description = "AWS SSO role selector that exports shell credentials"
 license = "MIT"
