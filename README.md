@@ -158,6 +158,32 @@ roleman -q sandbox
 # same as: roleman --query sandbox
 ```
 
+Override selector sorting mode for a run:
+
+```sh
+roleman --sort alphabetical
+```
+
+Show recent local selection history:
+
+```sh
+roleman history
+roleman history --json
+```
+
+Clear local selection history:
+
+```sh
+roleman history clear
+```
+
+History sorting notes:
+- When no initial query is provided, roleman boosts recently/frequently used roles.
+- Role picks from the same working directory get an additional context boost via the actual `cwd` path.
+- History is stored locally at `$XDG_STATE_HOME/roleman/history.jsonl` (or `~/.local/state/roleman/history.jsonl`).
+- `selector_sort = "dynamic"` enables this behavior; `selector_sort = "alphabetical"` disables it.
+- `--sort` overrides `selector_sort` for one run.
+
 ## Configuration
 
 Path: `~/.config/roleman/config.toml`
@@ -166,6 +192,7 @@ Path: `~/.config/roleman/config.toml`
 default_identity = "work"
 refresh_seconds = 300
 hook_prompt = "always"
+selector_sort = "dynamic"
 
 [[identities]]
 name = "work"
@@ -183,17 +210,21 @@ accounts = [
 Notes:
 - Higher `precedence` appears first.
 - `hook_prompt` values: `always`, `outdated`, `never`.
+- `selector_sort` values: `dynamic`, `alphabetical` (default: `dynamic`).
 - Use `--show-all` to bypass account/role filters for one run.
 
 ## Command Reference
 
 ```text
-roleman [--sso-start-url <url>] [--sso-region <region>] [--account <name>] [--no-cache] [--show-all] [-q|--query <term>] [--refresh-seconds <n>] [--env-file <path>] [--print] [--config <path>]
-roleman set|s [--account <name>] [-q|--query <term>]
-roleman open|o [--account <name>] [-q|--query <term>]
+roleman [--sso-start-url <url>] [--sso-region <region>] [--account <name>] [--no-cache] [--show-all] [--sort <dynamic|alphabetical>] [-q|--query <term>] [--refresh-seconds <n>] [--env-file <path>] [--print] [--config <path>]
+roleman set|s [--account <name>] [--sort <dynamic|alphabetical>] [-q|--query <term>]
+roleman open|o [--account <name>] [--sort <dynamic|alphabetical>] [-q|--query <term>]
 roleman hook [zsh|bash|fish]
 roleman install-hook [--force] [--alias]
 roleman unset|u
+roleman history [--limit <n>]
+roleman history [--limit <n>] [--json]
+roleman history clear
 ```
 
 ## Troubleshooting

@@ -13,6 +13,8 @@ pub struct Config {
     pub refresh_seconds: Option<u64>,
     pub prompt_for_hook: Option<bool>,
     pub hook_prompt: Option<HookPromptMode>,
+    #[serde(default)]
+    pub selector_sort: SelectorSortMode,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -21,6 +23,14 @@ pub enum HookPromptMode {
     Always,
     Never,
     Outdated,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "kebab-case")]
+pub enum SelectorSortMode {
+    #[default]
+    Dynamic,
+    Alphabetical,
 }
 
 impl Config {
@@ -110,6 +120,7 @@ mod tests {
             refresh_seconds: Some(120),
             prompt_for_hook: None,
             hook_prompt: None,
+            selector_sort: SelectorSortMode::Alphabetical,
         };
 
         config.save(&path).unwrap();
@@ -117,6 +128,7 @@ mod tests {
         assert_eq!(loaded.identities, config.identities);
         assert_eq!(loaded.default_identity, config.default_identity);
         assert_eq!(loaded.refresh_seconds, config.refresh_seconds);
+        assert_eq!(loaded.selector_sort, config.selector_sort);
     }
 
     #[test]
@@ -130,6 +142,7 @@ mod tests {
 
         let (config, path) = Config::load(None).unwrap();
         assert!(config.identities.is_empty());
+        assert_eq!(config.selector_sort, SelectorSortMode::Dynamic);
         assert_eq!(path, temp.path().join("roleman").join("config.toml"));
 
         unsafe {
