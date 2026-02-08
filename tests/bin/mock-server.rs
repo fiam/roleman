@@ -1,6 +1,9 @@
 use std::fs::OpenOptions;
 
-use roleman::{MockServerOptions, run_mock_server};
+#[path = "../common/mod.rs"]
+mod common;
+
+use common::{MockServerOptions, run_mock_server};
 use tracing_subscriber::prelude::*;
 
 fn main() {
