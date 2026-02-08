@@ -103,6 +103,14 @@ roleman
 
 On first run, Roleman uses device auth if needed, lets you pick an account/role, and exports AWS env vars.
 
+If you want to bootstrap without a config file first, pass the start URL and region flags:
+
+```sh
+roleman --sso-start-url https://acme.awsapps.com/start --sso-region us-east-1
+```
+
+Roleman will prompt to save this identity as your default when no config exists.
+
 ## Daily Usage
 
 Set credentials by picking an account/role:
@@ -176,7 +184,6 @@ Notes:
 roleman [--sso-start-url <url>] [--sso-region <region>] [--account <name>] [--no-cache] [--show-all] [--refresh-seconds <n>] [--env-file <path>] [--print] [--config <path>]
 roleman set|s [--account <name>]
 roleman open|o [--account <name>]
-roleman <sso-start-url>
 roleman hook [zsh|bash|fish]
 roleman install-hook [--force] [--alias]
 roleman unset|u

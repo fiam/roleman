@@ -5,8 +5,141 @@ use std::path::PathBuf;
 mod shell;
 
 use crate::shell::{Shell, detect_shell_from_env, shell_for_name};
+use clap::{Args, Parser, Subcommand};
 use roleman::{App, AppAction, AppOptions, Config, config::HookPromptMode, ui};
 use tracing_subscriber::prelude::*;
+
+#[derive(Debug, Parser)]
+#[command(
+    name = "roleman",
+    about = "Select an AWS IAM Identity Center role and export temporary AWS credentials",
+    long_about = "Roleman lets you pick an AWS IAM Identity Center (AWS SSO) account and role, then emits shell exports for temporary AWS credentials.\n\nUse `roleman` for interactive credential export, `roleman open` to open the selected role in the AWS access portal, and `roleman hook`/`roleman install-hook` for shell integration.",
+    disable_help_subcommand = true,
+    after_help = "Examples:\n  roleman\n  roleman --account prod\n  roleman --no-cache --print\n  roleman --sso-start-url https://acme.awsapps.com/start --sso-region us-east-1\n  roleman open\n  roleman hook\n  roleman install-hook --alias"
+)]
+struct Cli {
+    #[command(subcommand)]
+    command: Option<CliCommand>,
+
+    #[command(flatten)]
+    common: CommonArgs,
+}
+
+#[derive(Debug, Args, Clone, Default)]
+struct CommonArgs {
+    #[arg(
+        long = "sso-start-url",
+        help = "IAM Identity Center start URL to use for this run"
+    )]
+    sso_start_url: Option<String>,
+
+    #[arg(
+        long = "sso-region",
+        help = "IAM Identity Center region (for example: us-east-1)"
+    )]
+    sso_region: Option<String>,
+
+    #[arg(
+        short = 'a',
+        long = "account",
+        help = "Configured identity name to use instead of default_identity"
+    )]
+    account: Option<String>,
+
+    #[arg(
+        long = "no-cache",
+        help = "Ignore role/token caches and force refresh or sign-in"
+    )]
+    no_cache: bool,
+
+    #[arg(
+        long = "show-all",
+        help = "Ignore configured account/role filters for this run"
+    )]
+    show_all: bool,
+
+    #[arg(
+        long = "refresh-seconds",
+        help = "Polling interval in seconds while waiting for available roles"
+    )]
+    refresh_seconds: Option<u64>,
+
+    #[arg(
+        long = "env-file",
+        help = "Write env exports to this file (used by shell hooks)"
+    )]
+    env_file: Option<PathBuf>,
+
+    #[arg(
+        long = "print",
+        help = "Print env exports to stdout even when --env-file is set"
+    )]
+    print_env: bool,
+
+    #[arg(long = "config", help = "Path to config.toml")]
+    config_path: Option<PathBuf>,
+}
+
+#[derive(Debug, Subcommand)]
+enum CliCommand {
+    #[command(
+        alias = "s",
+        about = "Select a role and emit AWS credential exports",
+        long_about = "Launch the role selector and emit AWS credential exports for the chosen role.\n\nThis is equivalent to running `roleman` without a subcommand.",
+        after_help = "Examples:\n  roleman set\n  roleman set prod\n  roleman set --account prod"
+    )]
+    Set(RunSubcommandArgs),
+    #[command(
+        alias = "o",
+        about = "Select a role and open it in the AWS access portal",
+        long_about = "Launch the role selector and open the selected account/role directly in the AWS access portal.",
+        after_help = "Examples:\n  roleman open\n  roleman open prod\n  roleman open --account prod"
+    )]
+    Open(RunSubcommandArgs),
+    #[command(
+        about = "Print shell hook code for shell integration",
+        long_about = "Print the shell hook script to stdout. If no shell is provided, roleman auto-detects it from $SHELL.",
+        after_help = "Examples:\n  eval \"$(roleman hook)\"\n  eval \"$(roleman hook zsh)\"\n  roleman hook fish | source"
+    )]
+    Hook {
+        #[arg(
+            value_name = "shell",
+            help = "Shell name (bash, zsh, or fish). Defaults to auto-detect from $SHELL"
+        )]
+        shell: Option<String>,
+    },
+    #[command(
+        name = "install-hook",
+        about = "Install shell hook into your shell startup file",
+        long_about = "Detect your current shell and append the roleman hook loader to the corresponding shell startup file.\n\nSupported shells: bash, zsh, fish.",
+        after_help = "Examples:\n  roleman install-hook\n  roleman install-hook --alias\n  roleman install-hook --force --alias"
+    )]
+    InstallHook {
+        #[arg(long, help = "Remove existing roleman hook lines before reinstalling")]
+        force: bool,
+        #[arg(long, help = "Also install a short alias (`rl`) for `roleman`")]
+        alias: bool,
+    },
+    #[command(
+        alias = "u",
+        about = "Unset roleman-managed AWS environment variables",
+        long_about = "Prints shell commands to unset AWS environment variables managed by roleman.\n\nWhen running under a shell hook, writes the unset command to the hook env file so your current shell is updated."
+    )]
+    Unset,
+}
+
+#[derive(Debug, Args)]
+struct RunSubcommandArgs {
+    #[command(flatten)]
+    common: CommonArgs,
+
+    #[arg(
+        value_name = "account",
+        id = "command_account",
+        help = "Configured identity name to use instead of default_identity"
+    )]
+    account: Option<String>,
+}
 
 fn main() {
     let env_filter = tracing_subscriber::EnvFilter::from_default_env();
@@ -29,125 +162,36 @@ fn main() {
         None
     };
 
-    let args_vec = std::env::args().skip(1).collect::<Vec<_>>();
-    let subcommand = args_vec.first().map(|v| v.as_str());
-    let is_hook = matches!(subcommand, Some("hook"));
-    let is_install_hook = matches!(subcommand, Some("install-hook"));
-    let is_unset = matches!(subcommand, Some("unset") | Some("u"));
-    let is_set = matches!(subcommand, Some("set") | Some("s"));
-    let is_open = matches!(subcommand, Some("open") | Some("o"));
-    if is_hook {
-        let shell_name = args_vec.get(1).map(|value| value.as_str());
-        let shell = match resolve_hook_shell(shell_name) {
-            Ok(shell) => shell,
-            Err(err) => {
+    let cli = Cli::parse();
+
+    match &cli.command {
+        Some(CliCommand::Hook { shell }) => {
+            let shell = match resolve_hook_shell(shell.as_deref()) {
+                Ok(shell) => shell,
+                Err(err) => {
+                    eprintln!("error: {err}");
+                    std::process::exit(2);
+                }
+            };
+            print_hook(shell);
+            return;
+        }
+        Some(CliCommand::InstallHook { force, alias }) => {
+            if let Err(err) = install_hook(*force, *alias) {
                 eprintln!("error: {err}");
                 std::process::exit(2);
             }
-        };
-        print_hook(shell);
-        return;
-    }
-    if is_install_hook {
-        let (force, alias) = parse_install_hook_args(&args_vec[1..]);
-        if let Err(err) = install_hook(force, alias) {
-            eprintln!("error: {err}");
-            std::process::exit(2);
+            return;
         }
-        return;
-    }
-    if is_unset {
-        handle_unset();
-        return;
-    }
-    let mut options = AppOptions::default();
-    if is_open {
-        options.action = AppAction::Open;
-    }
-    let mut index = if is_set || is_open { 1 } else { 0 };
-    if (is_set || is_open)
-        && let Some(value) = args_vec.get(1)
-        && !value.starts_with('-')
-    {
-        options.account = Some(value.clone());
-        index = 2;
-    }
-    while index < args_vec.len() {
-        let arg = &args_vec[index];
-        match arg.as_str() {
-            "--sso-start-url" => {
-                index += 1;
-                options.start_url = args_vec.get(index).cloned();
-                if options.start_url.is_none() {
-                    exit_usage("missing value for --sso-start-url");
-                }
-            }
-            "--no-cache" => {
-                options.ignore_cache = true;
-            }
-            "--show-all" => {
-                options.show_all = true;
-            }
-            "--sso-region" => {
-                index += 1;
-                options.sso_region = args_vec.get(index).cloned();
-                if options.sso_region.is_none() {
-                    exit_usage("missing value for --sso-region");
-                }
-            }
-            "-a" | "--account" => {
-                index += 1;
-                options.account = args_vec.get(index).cloned();
-                if options.account.is_none() {
-                    exit_usage("missing value for --account");
-                }
-            }
-            "--refresh-seconds" => {
-                index += 1;
-                let value = args_vec.get(index).cloned().unwrap_or_default();
-                let parsed = value.parse::<u64>().ok();
-                if parsed.is_none() {
-                    exit_usage("invalid value for --refresh-seconds");
-                }
-                options.refresh_seconds = parsed;
-            }
-            "--env-file" => {
-                index += 1;
-                let value = args_vec.get(index).cloned().unwrap_or_default();
-                if value.is_empty() {
-                    exit_usage("missing value for --env-file");
-                }
-                options.env_file = Some(PathBuf::from(value));
-            }
-            "--print" => {
-                options.print_env = true;
-            }
-            "--config" => {
-                index += 1;
-                let value = args_vec.get(index).cloned().unwrap_or_default();
-                if value.is_empty() {
-                    exit_usage("missing value for --config");
-                }
-                options.config_path = Some(PathBuf::from(value));
-            }
-            "-h" | "--help" => {
-                print_usage();
-                return;
-            }
-            _ => {
-                if options.start_url.is_none() {
-                    options.start_url = Some(arg.to_string());
-                } else {
-                    exit_usage("unexpected argument");
-                }
-            }
+        Some(CliCommand::Unset) => {
+            handle_unset();
+            return;
         }
-        index += 1;
+        _ => {}
     }
 
-    if !is_hook && !is_install_hook {
-        maybe_prompt_install_hook(options.config_path.as_deref());
-    }
+    let options = build_app_options(&cli);
+    maybe_prompt_install_hook(options.config_path.as_deref());
 
     let runtime = tokio::runtime::Runtime::new().expect("failed to start runtime");
     let result = runtime.block_on(App::new(options).run());
@@ -159,10 +203,60 @@ fn main() {
     drop(_guard);
 }
 
-fn print_usage() {
-    eprintln!(
-        "usage: roleman [--sso-start-url <url>] [--sso-region <region>] [--account <name>] [--no-cache] [--show-all] [--refresh-seconds <n>] [--env-file <path>] [--print] [--config <path>]\n       roleman set|s [--account <name>]\n       roleman open|o [--account <name>]\n       roleman <sso-start-url>\n       roleman hook [zsh|bash|fish]\n       roleman install-hook [--force] [--alias]\n       roleman unset|u"
-    );
+fn build_app_options(cli: &Cli) -> AppOptions {
+    match &cli.command {
+        Some(CliCommand::Set(args)) => {
+            let common = merge_common_args(&cli.common, &args.common);
+            app_options_from_parts(&common, AppAction::Set, args.account.clone())
+        }
+        Some(CliCommand::Open(args)) => {
+            let common = merge_common_args(&cli.common, &args.common);
+            app_options_from_parts(&common, AppAction::Open, args.account.clone())
+        }
+        _ => app_options_from_parts(&cli.common, AppAction::Set, None),
+    }
+}
+
+fn app_options_from_parts(
+    common: &CommonArgs,
+    action: AppAction,
+    positional_account: Option<String>,
+) -> AppOptions {
+    AppOptions {
+        start_url: common.sso_start_url.clone(),
+        sso_region: common.sso_region.clone(),
+        refresh_seconds: common.refresh_seconds,
+        config_path: common.config_path.clone(),
+        ignore_cache: common.no_cache,
+        env_file: common.env_file.clone(),
+        print_env: common.print_env,
+        account: common.account.clone().or(positional_account),
+        show_all: common.show_all,
+        action,
+    }
+}
+
+fn merge_common_args(parent: &CommonArgs, child: &CommonArgs) -> CommonArgs {
+    CommonArgs {
+        sso_start_url: child
+            .sso_start_url
+            .clone()
+            .or_else(|| parent.sso_start_url.clone()),
+        sso_region: child
+            .sso_region
+            .clone()
+            .or_else(|| parent.sso_region.clone()),
+        account: child.account.clone().or_else(|| parent.account.clone()),
+        no_cache: child.no_cache || parent.no_cache,
+        show_all: child.show_all || parent.show_all,
+        refresh_seconds: child.refresh_seconds.or(parent.refresh_seconds),
+        env_file: child.env_file.clone().or_else(|| parent.env_file.clone()),
+        print_env: child.print_env || parent.print_env,
+        config_path: child
+            .config_path
+            .clone()
+            .or_else(|| parent.config_path.clone()),
+    }
 }
 
 fn print_hook(shell: &dyn Shell) {
@@ -200,27 +294,6 @@ fn handle_unset() {
 
 fn unset_payload() -> &'static str {
     "unset AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN AWS_CREDENTIAL_EXPIRATION AWS_DEFAULT_REGION AWS_REGION AWS_PROFILE\n"
-}
-
-fn exit_usage(message: &str) -> ! {
-    eprintln!("error: {message}");
-    print_usage();
-    std::process::exit(2);
-}
-
-fn parse_install_hook_args(args: &[String]) -> (bool, bool) {
-    let mut force = false;
-    let mut alias = false;
-    for arg in args {
-        match arg.as_str() {
-            "--force" => force = true,
-            "--alias" => alias = true,
-            _ => {
-                exit_usage("invalid argument for install-hook");
-            }
-        }
-    }
-    (force, alias)
 }
 
 fn install_hook(force: bool, alias: bool) -> Result<(), String> {
@@ -388,5 +461,45 @@ fn hook_prompt_mode(config: &Config) -> HookPromptMode {
     match config.prompt_for_hook {
         Some(false) => HookPromptMode::Never,
         _ => HookPromptMode::Always,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Cli, CliCommand, build_app_options};
+    use clap::Parser;
+    use roleman::AppAction;
+
+    #[test]
+    fn parses_hook_without_shell_argument() {
+        let cli = Cli::try_parse_from(["roleman", "hook"]).expect("expected hook to parse");
+        match cli.command {
+            Some(CliCommand::Hook { shell }) => assert!(shell.is_none()),
+            _ => panic!("expected hook command"),
+        }
+    }
+
+    #[test]
+    fn parses_set_alias_with_positional_account() {
+        let cli =
+            Cli::try_parse_from(["roleman", "s", "prod"]).expect("expected set alias to parse");
+        let options = build_app_options(&cli);
+        assert_eq!(options.account.as_deref(), Some("prod"));
+        assert!(matches!(options.action, AppAction::Set));
+    }
+
+    #[test]
+    fn parses_open_alias_with_flag_account() {
+        let cli = Cli::try_parse_from(["roleman", "o", "--account", "prod"])
+            .expect("expected open alias to parse");
+        let options = build_app_options(&cli);
+        assert_eq!(options.account.as_deref(), Some("prod"));
+        assert!(matches!(options.action, AppAction::Open));
+    }
+
+    #[test]
+    fn rejects_positional_start_url() {
+        let result = Cli::try_parse_from(["roleman", "https://acme.awsapps.com/start"]);
+        assert!(result.is_err());
     }
 }
