@@ -13,6 +13,9 @@ use crate::credentials_cache::{self, CachedCredentialsStatus};
 use crate::error::{Error, Result};
 use crate::model::RoleChoice;
 
+const SKIM_COLOR_OVERRIDES: &str =
+    "dark,matched-bg:-1,bg+:-1,current:-1:reverse,current_match-bg:-1,current_match:-1:reverse";
+
 #[derive(Debug, Clone)]
 pub struct TuiSelection {
     pub choice: RoleChoice,
@@ -57,6 +60,8 @@ pub fn select_role(
         .height(height)
         .multi(false)
         .prompt(prompt.to_string())
+        // Use reverse-video for the current row so selection stays visible on light/dark terminals.
+        .color(Some(SKIM_COLOR_OVERRIDES.to_string()))
         .info(InfoDisplay::Hidden)
         .bind(vec![
             "ctrl-c:abort".to_string(),
