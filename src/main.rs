@@ -1,12 +1,16 @@
 use std::fs::OpenOptions;
 use std::io::IsTerminal;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 mod shell;
 
 use crate::shell::{Shell, detect_shell_from_env, shell_for_name};
-use clap::{Args, Parser, Subcommand};
-use roleman::{App, AppAction, AppOptions, Config, config::HookPromptMode, ui};
+use clap::{Args, Parser, Subcommand, ValueEnum};
+use roleman::{
+    App, AppAction, AppOptions, Config,
+    config::{HookPromptMode, SelectorSortMode},
+    history, ui,
+};
 use tracing_subscriber::prelude::*;
 
 #[derive(Debug, Parser)]
@@ -57,6 +61,14 @@ struct CommonArgs {
         help = "Ignore configured account/role filters for this run"
     )]
     show_all: bool,
+
+    #[arg(
+        long = "sort",
+        value_enum,
+        value_name = "mode",
+        help = "Selector sorting mode (overrides config selector_sort)"
+    )]
+    sort: Option<SortArg>,
 
     #[arg(
         short = 'q',
@@ -134,6 +146,12 @@ enum CliCommand {
         long_about = "Prints shell commands to unset AWS environment variables managed by roleman.\n\nWhen running under a shell hook, writes the unset command to the hook env file so your current shell is updated."
     )]
     Unset,
+    #[command(
+        about = "Inspect or clear local role selection history",
+        long_about = "Print recent role selections used for dynamic ordering, or clear that history.",
+        after_help = "Examples:\n  roleman history\n  roleman history --limit 20\n  roleman history clear"
+    )]
+    History(HistoryArgs),
 }
 
 #[derive(Debug, Args)]
@@ -147,6 +165,39 @@ struct RunSubcommandArgs {
         help = "Configured identity name to use instead of default_identity"
     )]
     account: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, ValueEnum)]
+enum SortArg {
+    Dynamic,
+    Alphabetical,
+}
+
+impl From<SortArg> for SelectorSortMode {
+    fn from(value: SortArg) -> Self {
+        match value {
+            SortArg::Dynamic => SelectorSortMode::Dynamic,
+            SortArg::Alphabetical => SelectorSortMode::Alphabetical,
+        }
+    }
+}
+
+#[derive(Debug, Args)]
+struct HistoryArgs {
+    #[command(subcommand)]
+    command: Option<HistorySubcommand>,
+
+    #[arg(long, default_value_t = 50, help = "Maximum history rows to print")]
+    limit: usize,
+
+    #[arg(long, help = "Print history entries as JSON")]
+    json: bool,
+}
+
+#[derive(Debug, Subcommand)]
+enum HistorySubcommand {
+    #[command(about = "Clear local role selection history")]
+    Clear,
 }
 
 fn main() {
@@ -195,6 +246,13 @@ fn main() {
             handle_unset();
             return;
         }
+        Some(CliCommand::History(args)) => {
+            if let Err(err) = handle_history(args) {
+                eprintln!("error: {err}");
+                std::process::exit(2);
+            }
+            return;
+        }
         _ => {}
     }
 
@@ -241,6 +299,7 @@ fn app_options_from_parts(
         account: common.account.clone().or(positional_account),
         show_all: common.show_all,
         initial_query: common.initial_query.clone(),
+        selector_sort: common.sort.map(Into::into),
         action,
     }
 }
@@ -258,6 +317,7 @@ fn merge_common_args(parent: &CommonArgs, child: &CommonArgs) -> CommonArgs {
         account: child.account.clone().or_else(|| parent.account.clone()),
         no_cache: child.no_cache || parent.no_cache,
         show_all: child.show_all || parent.show_all,
+        sort: child.sort.or(parent.sort),
         initial_query: child
             .initial_query
             .clone()
@@ -303,6 +363,116 @@ fn handle_unset() {
         return;
     }
     print_unset_exports();
+}
+
+fn handle_history(args: &HistoryArgs) -> Result<(), String> {
+    match args.command {
+        Some(HistorySubcommand::Clear) => {
+            history::clear_entries().map_err(|err| err.to_string())?;
+            let path = history::history_path().map_err(|err| err.to_string())?;
+            println!("Cleared history at {}", path.display());
+        }
+        None => {
+            let entries = history::recent_entries(args.limit).map_err(|err| err.to_string())?;
+            if entries.is_empty() {
+                println!("No role history recorded yet.");
+                return Ok(());
+            }
+            if args.json {
+                let json = serde_json::to_string_pretty(&entries).map_err(|err| err.to_string())?;
+                println!("{json}");
+            } else {
+                print_history_table(&entries);
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn print_history_table(entries: &[history::HistoryEntry]) {
+    let headers = ["Timestamp", "Identity", "Account", "Role", "Cwd"];
+    let rows: Vec<[String; 5]> = entries
+        .iter()
+        .map(|entry| {
+            [
+                history::format_timestamp(entry.selected_at_unix),
+                entry.identity.clone(),
+                format!("{} ({})", entry.account_name, entry.account_id),
+                entry.role_name.clone(),
+                entry
+                    .cwd
+                    .as_deref()
+                    .map(compact_home_path)
+                    .unwrap_or_else(|| "-".to_string()),
+            ]
+        })
+        .collect();
+
+    let mut widths = headers.map(|header| header.len());
+    for row in &rows {
+        for (index, value) in row.iter().enumerate() {
+            widths[index] = widths[index].max(value.len());
+        }
+    }
+
+    println!(
+        "{:<w0$}  {:<w1$}  {:<w2$}  {:<w3$}  {:<w4$}",
+        headers[0],
+        headers[1],
+        headers[2],
+        headers[3],
+        headers[4],
+        w0 = widths[0],
+        w1 = widths[1],
+        w2 = widths[2],
+        w3 = widths[3],
+        w4 = widths[4],
+    );
+    println!(
+        "{:-<w0$}  {:-<w1$}  {:-<w2$}  {:-<w3$}  {:-<w4$}",
+        "",
+        "",
+        "",
+        "",
+        "",
+        w0 = widths[0],
+        w1 = widths[1],
+        w2 = widths[2],
+        w3 = widths[3],
+        w4 = widths[4],
+    );
+    for row in rows {
+        println!(
+            "{:<w0$}  {:<w1$}  {:<w2$}  {:<w3$}  {:<w4$}",
+            row[0],
+            row[1],
+            row[2],
+            row[3],
+            row[4],
+            w0 = widths[0],
+            w1 = widths[1],
+            w2 = widths[2],
+            w3 = widths[3],
+            w4 = widths[4],
+        );
+    }
+}
+
+fn compact_home_path(path: &str) -> String {
+    let Ok(home) = std::env::var("HOME") else {
+        return path.to_string();
+    };
+    let home = Path::new(&home);
+    let path = Path::new(path);
+    let Ok(stripped) = path.strip_prefix(home) else {
+        return path.display().to_string();
+    };
+    if stripped.as_os_str().is_empty() {
+        "~".to_string()
+    } else {
+        format!("~/{}", stripped.display())
+    }
 }
 
 fn unset_payload() -> &'static str {
@@ -479,9 +649,16 @@ fn hook_prompt_mode(config: &Config) -> HookPromptMode {
 
 #[cfg(test)]
 mod tests {
-    use super::{Cli, CliCommand, build_app_options};
+    use super::{Cli, CliCommand, HistorySubcommand, build_app_options};
     use clap::Parser;
     use roleman::AppAction;
+    use std::sync::{Mutex, MutexGuard};
+
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    fn lock_env() -> MutexGuard<'static, ()> {
+        ENV_LOCK.lock().expect("failed to lock env mutex")
+    }
 
     #[test]
     fn parses_hook_without_shell_argument() {
@@ -538,5 +715,66 @@ mod tests {
     fn rejects_search_alias_after_standardizing_query_flag() {
         let cli = Cli::try_parse_from(["roleman", "--search", "sandbox"]);
         assert!(cli.is_err());
+    }
+
+    #[test]
+    fn parses_history_clear_command() {
+        let cli =
+            Cli::try_parse_from(["roleman", "history", "clear"]).expect("expected history clear");
+        match cli.command {
+            Some(CliCommand::History(args)) => {
+                assert!(matches!(args.command, Some(HistorySubcommand::Clear)));
+            }
+            _ => panic!("expected history command"),
+        }
+    }
+
+    #[test]
+    fn parses_history_json_flag() {
+        let cli = Cli::try_parse_from(["roleman", "history", "--json"])
+            .expect("expected history json flag parse");
+        match cli.command {
+            Some(CliCommand::History(args)) => {
+                assert!(args.json);
+                assert!(args.command.is_none());
+            }
+            _ => panic!("expected history command"),
+        }
+    }
+
+    #[test]
+    fn parses_sort_flag() {
+        let cli = Cli::try_parse_from(["roleman", "--sort", "alphabetical"])
+            .expect("expected sort flag parse");
+        let options = build_app_options(&cli);
+        assert_eq!(
+            options.selector_sort,
+            Some(roleman::config::SelectorSortMode::Alphabetical)
+        );
+    }
+
+    #[test]
+    fn compacts_home_prefix_to_tilde() {
+        let _lock = lock_env();
+        let previous = std::env::var("HOME").ok();
+        unsafe {
+            std::env::set_var("HOME", "/Users/alberto");
+        }
+        assert_eq!(super::compact_home_path("/Users/alberto"), "~");
+        assert_eq!(
+            super::compact_home_path("/Users/alberto/Source/roleman"),
+            "~/Source/roleman"
+        );
+        assert_eq!(
+            super::compact_home_path("/tmp/roleman"),
+            "/tmp/roleman".to_string()
+        );
+        unsafe {
+            if let Some(value) = previous {
+                std::env::set_var("HOME", value);
+            } else {
+                std::env::remove_var("HOME");
+            }
+        }
     }
 }

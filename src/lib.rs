@@ -4,6 +4,7 @@ pub mod aws_sdk;
 pub mod config;
 mod credentials_cache;
 mod error;
+pub mod history;
 mod model;
 mod roles_cache;
 mod sso_cache;
@@ -11,7 +12,7 @@ mod tui;
 pub mod ui;
 
 pub use crate::config::Config;
-use crate::config::SsoIdentity;
+use crate::config::{SelectorSortMode, SsoIdentity};
 pub use crate::error::{Error, Result};
 use crate::model::{EnvVars, RoleChoice};
 use futures::StreamExt;
@@ -41,6 +42,7 @@ pub struct AppOptions {
     pub account: Option<String>,
     pub show_all: bool,
     pub initial_query: Option<String>,
+    pub selector_sort: Option<SelectorSortMode>,
     pub action: AppAction,
 }
 
@@ -55,6 +57,7 @@ impl App {
         let identity = resolve_identity(&self.options, &mut config, &config_path, config_exists)?;
         let start_url = identity.start_url.clone();
         let refresh_seconds = self.options.refresh_seconds.or(config.refresh_seconds);
+        let selector_sort = self.options.selector_sort.unwrap_or(config.selector_sort);
 
         let (mut cache, mut choices) =
             fetch_choices_with_cache(&identity, self.options.ignore_cache).await?;
@@ -63,6 +66,15 @@ impl App {
             apply_account_filters(&mut choices, &identity);
         }
         sort_choices(&mut choices, &identity);
+        if matches!(selector_sort, SelectorSortMode::Dynamic)
+            && let Err(err) = history::apply_history_sort(
+                &mut choices,
+                &identity.name,
+                self.options.initial_query.as_deref(),
+            )
+        {
+            debug!(error = %err, "failed to apply history sort");
+        }
 
         let mut visible = choices;
         if visible.is_empty()
@@ -78,6 +90,15 @@ impl App {
                     apply_account_filters(&mut visible, &identity);
                 }
                 sort_choices(&mut visible, &identity);
+                if matches!(selector_sort, SelectorSortMode::Dynamic)
+                    && let Err(err) = history::apply_history_sort(
+                        &mut visible,
+                        &identity.name,
+                        self.options.initial_query.as_deref(),
+                    )
+                {
+                    debug!(error = %err, "failed to apply history sort");
+                }
                 if !visible.is_empty() {
                     break;
                 }
@@ -110,6 +131,9 @@ impl App {
                 role_name = %choice.role_name,
                 "selected role"
             );
+            if let Err(err) = history::record_selection(&identity.name, &choice) {
+                debug!(error = %err, "failed to record history selection");
+            }
             if matches!(self.options.action, AppAction::Set) && selection.open_in_browser {
                 let url = console_url(&start_url, &choice.account_id, &choice.role_name);
                 eprintln!("{}", ui::action(&format!("Opening {url}")));
