@@ -34,5 +34,18 @@ jobs:
         with:
           command: check advisories bans sources
 
+      - name: Install cargo-dist
+        shell: bash
+        run: |
+          DIST_VERSION="$(sed -nE 's/^cargo-dist-version = "([^"]+)"/\1/p' Cargo.toml | head -n1)"
+          if [[ -z "$DIST_VERSION" ]]; then
+            echo "could not find cargo-dist-version in Cargo.toml" >&2
+            exit 1
+          fi
+          curl --proto '=https' --tlsv1.2 -LsSf "https://github.com/axodotdev/cargo-dist/releases/download/v${DIST_VERSION}/cargo-dist-installer.sh" | sh
+
+      - name: Check release workflow freshness
+        run: dist generate --mode=ci --check
+
       - name: Test
         run: cargo test
