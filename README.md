@@ -151,6 +151,13 @@ Use a non-default configured identity:
 roleman --account prod
 ```
 
+Start the selector with an initial query term:
+
+```sh
+roleman -q sandbox
+# same as: roleman --query sandbox
+```
+
 ## Configuration
 
 Path: `~/.config/roleman/config.toml`
@@ -181,9 +188,9 @@ Notes:
 ## Command Reference
 
 ```text
-roleman [--sso-start-url <url>] [--sso-region <region>] [--account <name>] [--no-cache] [--show-all] [--refresh-seconds <n>] [--env-file <path>] [--print] [--config <path>]
-roleman set|s [--account <name>]
-roleman open|o [--account <name>]
+roleman [--sso-start-url <url>] [--sso-region <region>] [--account <name>] [--no-cache] [--show-all] [-q|--query <term>] [--refresh-seconds <n>] [--env-file <path>] [--print] [--config <path>]
+roleman set|s [--account <name>] [-q|--query <term>]
+roleman open|o [--account <name>] [-q|--query <term>]
 roleman hook [zsh|bash|fish]
 roleman install-hook [--force] [--alias]
 roleman unset|u

@@ -15,7 +15,7 @@ use tracing_subscriber::prelude::*;
     about = "Select an AWS IAM Identity Center role and export temporary AWS credentials",
     long_about = "Roleman lets you pick an AWS IAM Identity Center (AWS SSO) account and role, then emits shell exports for temporary AWS credentials.\n\nUse `roleman` for interactive credential export, `roleman open` to open the selected role in the AWS access portal, and `roleman hook`/`roleman install-hook` for shell integration.",
     disable_help_subcommand = true,
-    after_help = "Examples:\n  roleman\n  roleman --account prod\n  roleman --no-cache --print\n  roleman --sso-start-url https://acme.awsapps.com/start --sso-region us-east-1\n  roleman open\n  roleman hook\n  roleman install-hook --alias"
+    after_help = "Examples:\n  roleman\n  roleman --account prod\n  roleman -q sandbox\n  roleman --no-cache --print\n  roleman --sso-start-url https://acme.awsapps.com/start --sso-region us-east-1\n  roleman open\n  roleman hook\n  roleman install-hook --alias"
 )]
 struct Cli {
     #[command(subcommand)]
@@ -59,6 +59,14 @@ struct CommonArgs {
     show_all: bool,
 
     #[arg(
+        short = 'q',
+        long = "query",
+        value_name = "term",
+        help = "Initial query term for account/role selection"
+    )]
+    initial_query: Option<String>,
+
+    #[arg(
         long = "refresh-seconds",
         help = "Polling interval in seconds while waiting for available roles"
     )]
@@ -86,14 +94,14 @@ enum CliCommand {
         alias = "s",
         about = "Select a role and emit AWS credential exports",
         long_about = "Launch the role selector and emit AWS credential exports for the chosen role.\n\nThis is equivalent to running `roleman` without a subcommand.",
-        after_help = "Examples:\n  roleman set\n  roleman set prod\n  roleman set --account prod"
+        after_help = "Examples:\n  roleman set\n  roleman set prod\n  roleman set --account prod\n  roleman set -q sandbox"
     )]
     Set(RunSubcommandArgs),
     #[command(
         alias = "o",
         about = "Select a role and open it in the AWS access portal",
         long_about = "Launch the role selector and open the selected account/role directly in the AWS access portal.",
-        after_help = "Examples:\n  roleman open\n  roleman open prod\n  roleman open --account prod"
+        after_help = "Examples:\n  roleman open\n  roleman open prod\n  roleman open --account prod\n  roleman open -q prod-admin"
     )]
     Open(RunSubcommandArgs),
     #[command(
@@ -232,6 +240,7 @@ fn app_options_from_parts(
         print_env: common.print_env,
         account: common.account.clone().or(positional_account),
         show_all: common.show_all,
+        initial_query: common.initial_query.clone(),
         action,
     }
 }
@@ -249,6 +258,10 @@ fn merge_common_args(parent: &CommonArgs, child: &CommonArgs) -> CommonArgs {
         account: child.account.clone().or_else(|| parent.account.clone()),
         no_cache: child.no_cache || parent.no_cache,
         show_all: child.show_all || parent.show_all,
+        initial_query: child
+            .initial_query
+            .clone()
+            .or_else(|| parent.initial_query.clone()),
         refresh_seconds: child.refresh_seconds.or(parent.refresh_seconds),
         env_file: child.env_file.clone().or_else(|| parent.env_file.clone()),
         print_env: child.print_env || parent.print_env,
@@ -501,5 +514,29 @@ mod tests {
     fn rejects_positional_start_url() {
         let result = Cli::try_parse_from(["roleman", "https://acme.awsapps.com/start"]);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn parses_initial_query_long_flag() {
+        let cli = Cli::try_parse_from(["roleman", "set", "--query", "sandbox-admin"])
+            .expect("expected --query to parse");
+        let options = build_app_options(&cli);
+        assert_eq!(options.initial_query.as_deref(), Some("sandbox-admin"));
+        assert!(matches!(options.action, AppAction::Set));
+    }
+
+    #[test]
+    fn parses_initial_query_short_flag() {
+        let cli =
+            Cli::try_parse_from(["roleman", "open", "-q", "prod-admin"]).expect("expected -q");
+        let options = build_app_options(&cli);
+        assert_eq!(options.initial_query.as_deref(), Some("prod-admin"));
+        assert!(matches!(options.action, AppAction::Open));
+    }
+
+    #[test]
+    fn rejects_search_alias_after_standardizing_query_flag() {
+        let cli = Cli::try_parse_from(["roleman", "--search", "sandbox"]);
+        assert!(cli.is_err());
     }
 }
