@@ -2,6 +2,9 @@ use std::fs::OpenOptions;
 use std::io::IsTerminal;
 use std::path::PathBuf;
 
+mod shell;
+
+use crate::shell::{Shell, detect_shell_from_env, shell_for_name};
 use roleman::{App, AppAction, AppOptions, Config, config::HookPromptMode, ui};
 use tracing_subscriber::prelude::*;
 
@@ -34,17 +37,16 @@ fn main() {
     let is_set = matches!(subcommand, Some("set") | Some("s"));
     let is_open = matches!(subcommand, Some("open") | Some("o"));
     if is_hook {
-        let shell = args_vec.get(1).cloned().unwrap_or_default();
-        if shell == "zsh" {
-            print_hook("zsh");
-            return;
-        }
-        if shell == "bash" {
-            print_hook("bash");
-            return;
-        }
-        eprintln!("unsupported shell hook: {shell}");
-        std::process::exit(2);
+        let shell_name = args_vec.get(1).map(|value| value.as_str());
+        let shell = match resolve_hook_shell(shell_name) {
+            Ok(shell) => shell,
+            Err(err) => {
+                eprintln!("error: {err}");
+                std::process::exit(2);
+            }
+        };
+        print_hook(shell);
+        return;
     }
     if is_install_hook {
         let (force, alias) = parse_install_hook_args(&args_vec[1..]);
@@ -159,49 +161,22 @@ fn main() {
 
 fn print_usage() {
     eprintln!(
-        "usage: roleman [--sso-start-url <url>] [--sso-region <region>] [--account <name>] [--no-cache] [--show-all] [--refresh-seconds <n>] [--env-file <path>] [--print] [--config <path>]\n       roleman set|s [--account <name>]\n       roleman open|o [--account <name>]\n       roleman <sso-start-url>\n       roleman hook zsh|bash\n       roleman install-hook [--force] [--alias]\n       roleman unset|u"
+        "usage: roleman [--sso-start-url <url>] [--sso-region <region>] [--account <name>] [--no-cache] [--show-all] [--refresh-seconds <n>] [--env-file <path>] [--print] [--config <path>]\n       roleman set|s [--account <name>]\n       roleman open|o [--account <name>]\n       roleman <sso-start-url>\n       roleman hook [zsh|bash|fish]\n       roleman install-hook [--force] [--alias]\n       roleman unset|u"
     );
 }
 
-fn print_hook(shell: &str) {
-    println!("{}", hook_snippet(shell));
+fn print_hook(shell: &dyn Shell) {
+    println!("{}", shell.hook_snippet());
 }
 
-fn hook_snippet(shell: &str) -> String {
-    match shell {
-        "zsh" => r##"export _ROLEMAN_HOOK_ENV="${XDG_STATE_HOME:-$HOME/.local/state}/roleman/env-${TTY//\//_}"
-export _ROLEMAN_HOOK_VERSION=1
-roleman() {
-  command roleman --env-file "$_ROLEMAN_HOOK_ENV" "$@"
-}
-_roleman_precmd() {
-  if [[ -f "$_ROLEMAN_HOOK_ENV" ]]; then
-    source "$_ROLEMAN_HOOK_ENV"
-    rm -f "$_ROLEMAN_HOOK_ENV"
-  fi
-}
-autoload -Uz add-zsh-hook
-add-zsh-hook precmd _roleman_precmd"##
-            .to_string(),
-        "bash" => r##"export _ROLEMAN_HOOK_ENV="${XDG_STATE_HOME:-$HOME/.local/state}/roleman/env-${TTY//\//_}"
-export _ROLEMAN_HOOK_VERSION=1
-roleman() {
-  command roleman --env-file "$_ROLEMAN_HOOK_ENV" "$@"
-}
-_roleman_prompt_command() {
-  if [[ -f "$_ROLEMAN_HOOK_ENV" ]]; then
-    source "$_ROLEMAN_HOOK_ENV"
-    rm -f "$_ROLEMAN_HOOK_ENV"
-  fi
-}
-if [[ -n "${PROMPT_COMMAND:-}" ]]; then
-  PROMPT_COMMAND="_roleman_prompt_command;${PROMPT_COMMAND}"
-else
-  PROMPT_COMMAND="_roleman_prompt_command"
-fi"##
-            .to_string(),
-        _ => String::new(),
+fn resolve_hook_shell(shell_name: Option<&str>) -> Result<&'static dyn Shell, String> {
+    if let Some(name) = shell_name {
+        return shell_for_name(name).ok_or_else(|| format!("unsupported shell hook: {name}"));
     }
+    detect_shell_from_env().ok_or_else(|| {
+        "failed to auto-detect shell (set SHELL to bash, zsh, or fish, or pass `roleman hook <shell>`)"
+            .to_string()
+    })
 }
 
 fn print_unset_exports() {
@@ -249,10 +224,13 @@ fn parse_install_hook_args(args: &[String]) -> (bool, bool) {
 }
 
 fn install_hook(force: bool, alias: bool) -> Result<(), String> {
-    let shell = detect_shell().ok_or("unsupported shell (expected bash or zsh)")?;
-    let path = shell_rc_path(&shell)?;
+    let shell = detect_shell_from_env().ok_or("unsupported shell (expected bash, zsh, or fish)")?;
+    let path = shell.rc_path()?;
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|err| err.to_string())?;
+    }
     let mut contents = std::fs::read_to_string(&path).unwrap_or_default();
-    let install_line = format!("eval \"$(roleman hook {shell})\"");
+    let install_line = shell.install_line();
     if has_active_hook(&contents, &install_line) {
         if !force {
             return Err("hook already installed (use --force to overwrite)".into());
@@ -264,7 +242,7 @@ fn install_hook(force: bool, alias: bool) -> Result<(), String> {
     block.push_str(&install_line);
     if alias {
         block.push('\n');
-        block.push_str("alias rl='roleman'");
+        block.push_str(shell.alias_line());
     }
     block.push('\n');
     if !contents.is_empty() && !contents.ends_with('\n') {
@@ -276,36 +254,16 @@ fn install_hook(force: bool, alias: bool) -> Result<(), String> {
     Ok(())
 }
 
-fn detect_shell() -> Option<String> {
-    let shell = std::env::var("SHELL").ok()?;
-    let name = std::path::Path::new(&shell)
-        .file_name()
-        .and_then(|value| value.to_str())?
-        .to_string();
-    match name.as_str() {
-        "zsh" | "bash" => Some(name),
-        _ => None,
-    }
-}
-
-fn shell_rc_path(shell: &str) -> Result<PathBuf, String> {
-    let home = std::env::var("HOME").map_err(|_| "missing HOME".to_string())?;
-    let path = match shell {
-        "zsh" => PathBuf::from(home).join(".zshrc"),
-        "bash" => PathBuf::from(home).join(".bashrc"),
-        _ => return Err("unsupported shell".into()),
-    };
-    Ok(path)
-}
-
 fn remove_hook_lines(contents: &str) -> String {
     contents
         .lines()
         .filter(|line| {
             let trimmed = line.trim();
             trimmed != "alias rl='roleman'"
+                && trimmed != "alias rl roleman"
                 && trimmed != "export _ROLEMAN_HOOK_VERSION=1"
                 && !trimmed.starts_with("eval \"$(roleman hook ")
+                && !trimmed.starts_with("roleman hook ")
                 && !trimmed.contains("_ROLEMAN_HOOK_ENV")
                 && !trimmed.contains("_ROLEMAN_HOOK_VERSION")
         })
@@ -328,25 +286,25 @@ fn maybe_prompt_install_hook(config_path: Option<&std::path::Path>) {
     if std::env::var("_ROLEMAN_HOOK_VERSION").is_ok() {
         return;
     }
-    let Ok(shell) = detect_shell().ok_or(()) else {
+    let Some(shell) = detect_shell_from_env() else {
         return;
     };
-    let Ok(path) = shell_rc_path(&shell) else {
+    let Ok(path) = shell.rc_path() else {
         return;
     };
-    let install_line = format!("eval \"$(roleman hook {shell})\"");
+    let install_line = shell.install_line();
     if std::env::var("_ROLEMAN_HOOK_ENV").is_ok() {
+        let reload_cmd = shell.reload_command(&path);
         ui::print_warn(&format!(
-            "Shell hook looks outdated. Please reload your shell: source {}",
-            path.display()
+            "Shell hook looks outdated. Please reload your shell: {reload_cmd}"
         ));
         return;
     }
     let contents = std::fs::read_to_string(&path).unwrap_or_default();
     if has_active_hook(&contents, &install_line) {
+        let reload_cmd = shell.reload_command(&path);
         ui::print_warn(&format!(
-            "Shell hook is installed but not active. Reload your shell: source {}",
-            path.display()
+            "Shell hook is installed but not active. Reload your shell: {reload_cmd}"
         ));
         return;
     }
