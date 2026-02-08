@@ -40,6 +40,7 @@ pub struct AppOptions {
     pub print_env: bool,
     pub account: Option<String>,
     pub show_all: bool,
+    pub initial_query: Option<String>,
     pub action: AppAction,
 }
 
@@ -87,8 +88,21 @@ impl App {
             AppAction::Set => "roleman> ",
             AppAction::Open => "roleman open> ",
         };
-        let selected = select_role_async(prompt, &visible, &start_url, &cache.region).await?;
+        let selected = select_role_async(
+            prompt,
+            &visible,
+            &start_url,
+            &cache.region,
+            self.options.initial_query.as_deref(),
+        )
+        .await?;
         if let Some(selection) = selected {
+            if selection.auto_selected {
+                eprintln!(
+                    "{}",
+                    ui::info(&format!("Using {}.", selection.choice.label()))
+                );
+            }
             let choice = selection.choice;
             tracing::debug!(
                 account_id = %choice.account_id,
@@ -214,14 +228,24 @@ async fn select_role_async(
     choices: &[RoleChoice],
     start_url: &str,
     region: &str,
+    initial_query: Option<&str>,
 ) -> Result<Option<tui::TuiSelection>> {
     let prompt = prompt.to_string();
     let choices = choices.to_vec();
     let start_url = start_url.to_string();
     let region = region.to_string();
-    tokio::task::spawn_blocking(move || tui::select_role(&prompt, &choices, &start_url, &region))
-        .await
-        .map_err(|err| Error::Tui(format!("failed to join tui task: {err}")))?
+    let initial_query = initial_query.map(ToOwned::to_owned);
+    tokio::task::spawn_blocking(move || {
+        tui::select_role(
+            &prompt,
+            &choices,
+            &start_url,
+            &region,
+            initial_query.as_deref(),
+        )
+    })
+    .await
+    .map_err(|err| Error::Tui(format!("failed to join tui task: {err}")))?
 }
 
 async fn fetch_choices_with_cache(
