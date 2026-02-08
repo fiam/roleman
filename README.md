@@ -35,7 +35,12 @@ cargo install --path .
 
 ### 2. Enable the shell hook (required)
 
-Roleman updates your current shell through a hook file. Supported shells: zsh and bash.
+Roleman updates your current shell through a hook file.
+
+Supported shells:
+- [zsh](https://www.zsh.org/)
+- [bash](https://www.gnu.org/software/bash/)
+- [fish](https://fishshell.com/)
 
 Recommended (installs into your shell rc file):
 
@@ -43,13 +48,27 @@ Recommended (installs into your shell rc file):
 roleman install-hook
 ```
 
-Optional one-off test in the current shell:
+Optional one-off test in zsh/bash (auto-detect from `$SHELL`):
 
 ```sh
-eval "$(roleman hook <shell>)"
+eval "$(roleman hook)"
 ```
 
-Replace `<shell>` with your shell name (currently `zsh` or `bash`).
+Optional explicit shell override:
+
+```sh
+eval "$(roleman hook zsh)"
+# or
+eval "$(roleman hook bash)"
+```
+
+Optional one-off test in fish:
+
+```sh
+roleman hook | source
+# or explicit:
+roleman hook fish | source
+```
 
 Optional alias:
 
@@ -158,7 +177,7 @@ roleman [--sso-start-url <url>] [--sso-region <region>] [--account <name>] [--no
 roleman set|s [--account <name>]
 roleman open|o [--account <name>]
 roleman <sso-start-url>
-roleman hook zsh|bash
+roleman hook [zsh|bash|fish]
 roleman install-hook [--force] [--alias]
 roleman unset|u
 ```

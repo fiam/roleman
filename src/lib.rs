@@ -143,8 +143,7 @@ impl App {
                         tracing::debug!("role credentials received");
                         fresh
                     };
-                    let omit_role_name =
-                        has_single_role_for_account(&visible, &choice.account_id);
+                    let omit_role_name = has_single_role_for_account(&visible, &choice.account_id);
                     let profile_name = aws_config::profile_name_for(&choice, omit_role_name);
                     aws_config::ensure_role_profile(
                         &profile_name,
