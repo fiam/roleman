@@ -1,6 +1,8 @@
+#![allow(dead_code)]
+
 use std::collections::HashMap;
 use std::net::SocketAddr;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use axum::body::Bytes;
@@ -14,10 +16,25 @@ use tokio::sync::oneshot;
 use tokio::task::JoinHandle;
 use tracing::info;
 
+static ENV_LOCK: Mutex<()> = Mutex::new(());
+
+pub fn lock_env() -> MutexGuard<'static, ()> {
+    ENV_LOCK.lock().expect("failed to lock env mutex")
+}
+
 #[derive(Debug, Clone)]
 pub struct MockServerOptions {
     pub host: String,
     pub port: u16,
+}
+
+impl Default for MockServerOptions {
+    fn default() -> Self {
+        Self {
+            host: "127.0.0.1".to_string(),
+            port: 7777,
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -31,15 +48,6 @@ pub struct MockServerHandle {
 struct MockState {
     accounts: Vec<(String, String)>,
     roles: HashMap<String, Vec<String>>,
-}
-
-impl Default for MockServerOptions {
-    fn default() -> Self {
-        Self {
-            host: "127.0.0.1".to_string(),
-            port: 7777,
-        }
-    }
 }
 
 pub async fn run_mock_server(options: MockServerOptions) -> Result<(), String> {

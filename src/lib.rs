@@ -4,7 +4,6 @@ pub mod aws_sdk;
 pub mod config;
 mod credentials_cache;
 mod error;
-mod mock_server;
 mod model;
 mod roles_cache;
 mod sso_cache;
@@ -14,9 +13,6 @@ pub mod ui;
 pub use crate::config::Config;
 use crate::config::SsoIdentity;
 pub use crate::error::{Error, Result};
-pub use crate::mock_server::{
-    MockServerHandle, MockServerOptions, run_mock_server, start_mock_server,
-};
 use crate::model::{EnvVars, RoleChoice};
 use futures::StreamExt;
 use std::path::{Path, PathBuf};

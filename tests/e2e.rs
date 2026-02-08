@@ -1,11 +1,11 @@
-mod support;
+mod common;
 
+use common::{MockServerOptions, lock_env, start_mock_server};
 use roleman::aws_sdk;
-use roleman::{MockServerOptions, start_mock_server};
 
 #[tokio::test]
 async fn e2e_sso_flow_uses_mock_endpoints() {
-    let _lock = support::lock_env();
+    let _lock = lock_env();
     let server = start_mock_server(MockServerOptions {
         host: "127.0.0.1".to_string(),
         port: 0,

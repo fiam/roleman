@@ -15,7 +15,7 @@ mock-server-bin = []
 
 [[bin]]
 name = "roleman-mock-server"
-path = "tests/bin/roleman-mock-server.rs"
+path = "tests/bin/mock-server.rs"
 required-features = ["mock-server-bin"]
 
 [workspace]
