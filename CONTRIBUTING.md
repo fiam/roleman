@@ -37,6 +37,7 @@ cargo test
 ## Releases
 
 Roleman uses `cargo-release` for versioning and `cargo-dist` for release artifacts.
+Release notes are generated from Conventional Commit titles into `CHANGELOG.md` as part of `cargo release`.
 
 1) Install release tooling:
 
@@ -49,6 +50,12 @@ cargo install cargo-dist
 
 ```sh
 cargo release patch
+```
+
+Optional preview without changing files:
+
+```sh
+DRY_RUN=true NEW_VERSION=0.0.0 ./scripts/generate-release-notes.sh
 ```
 
 3) Push the tag:
