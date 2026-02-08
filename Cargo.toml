@@ -71,4 +71,5 @@ codegen-units = 1
 [workspace.metadata.release]
 tag-name = "v{{version}}"
 pre-release-commit-message = "release: v{{version}}"
+pre-release-hook = ["./scripts/generate-release-notes.sh"]
 publish = false
