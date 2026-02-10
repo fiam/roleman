@@ -19,7 +19,7 @@ use tracing_subscriber::prelude::*;
     about = "Select an AWS IAM Identity Center role and export temporary AWS credentials",
     long_about = "Roleman lets you pick an AWS IAM Identity Center (AWS SSO) account and role, then emits shell exports for temporary AWS credentials.\n\nUse `roleman` for interactive credential export, `roleman open` to open the selected role in the AWS access portal, and `roleman hook`/`roleman install-hook` for shell integration.",
     disable_help_subcommand = true,
-    after_help = "Examples:\n  roleman\n  roleman --account prod\n  roleman -q sandbox\n  roleman --no-cache --print\n  roleman --sso-start-url https://acme.awsapps.com/start --sso-region us-east-1\n  roleman open\n  roleman hook\n  roleman install-hook --alias"
+    after_help = "Examples:\n  roleman\n  roleman --account prod\n  roleman -q sandbox\n  roleman --no-cache --print\n  roleman --no-cache --close-auth-tab --focus-terminal-after-auth\n  roleman --sso-start-url https://acme.awsapps.com/start --sso-region us-east-1\n  roleman open\n  roleman hook\n  roleman install-hook --alias"
 )]
 struct Cli {
     #[command(subcommand)]
@@ -95,6 +95,18 @@ struct CommonArgs {
         help = "Print env exports to stdout even when --env-file is set"
     )]
     print_env: bool,
+
+    #[arg(
+        long = "focus-terminal-after-auth",
+        help = "After successful SSO auth, try to bring your terminal app back to front"
+    )]
+    focus_terminal_after_auth: bool,
+
+    #[arg(
+        long = "close-auth-tab",
+        help = "After successful SSO auth, try to close the frontmost browser tab before refocusing terminal"
+    )]
+    close_auth_tab: bool,
 
     #[arg(long = "config", help = "Path to config.toml")]
     config_path: Option<PathBuf>,
@@ -296,6 +308,8 @@ fn app_options_from_parts(
         ignore_cache: common.no_cache,
         env_file: common.env_file.clone(),
         print_env: common.print_env,
+        focus_terminal_after_auth: common.focus_terminal_after_auth,
+        close_auth_tab: common.close_auth_tab,
         account: common.account.clone().or(positional_account),
         show_all: common.show_all,
         initial_query: common.initial_query.clone(),
@@ -325,6 +339,9 @@ fn merge_common_args(parent: &CommonArgs, child: &CommonArgs) -> CommonArgs {
         refresh_seconds: child.refresh_seconds.or(parent.refresh_seconds),
         env_file: child.env_file.clone().or_else(|| parent.env_file.clone()),
         print_env: child.print_env || parent.print_env,
+        focus_terminal_after_auth: child.focus_terminal_after_auth
+            || parent.focus_terminal_after_auth,
+        close_auth_tab: child.close_auth_tab || parent.close_auth_tab,
         config_path: child
             .config_path
             .clone()
@@ -751,6 +768,24 @@ mod tests {
             options.selector_sort,
             Some(roleman::config::SelectorSortMode::Alphabetical)
         );
+    }
+
+    #[test]
+    fn parses_focus_terminal_after_auth_flag() {
+        let cli = Cli::try_parse_from(["roleman", "--focus-terminal-after-auth"])
+            .expect("expected --focus-terminal-after-auth to parse");
+        let options = build_app_options(&cli);
+        assert!(options.focus_terminal_after_auth);
+        assert!(!options.close_auth_tab);
+    }
+
+    #[test]
+    fn parses_close_auth_tab_flag() {
+        let cli = Cli::try_parse_from(["roleman", "set", "--close-auth-tab"])
+            .expect("expected --close-auth-tab to parse");
+        let options = build_app_options(&cli);
+        assert!(options.close_auth_tab);
+        assert!(matches!(options.action, AppAction::Set));
     }
 
     #[test]

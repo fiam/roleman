@@ -33,6 +33,7 @@ skip = [
     { name = "thiserror-impl", version = "*" },
     { name = "tokio-rustls", version = "*" },
     { name = "windows-sys", version = "*" },
+    { name = "windows-link", version = "*" },
     { name = "windows-targets", version = "*" },
     { name = "windows_aarch64_gnullvm", version = "*" },
     { name = "windows_aarch64_msvc", version = "*" },
