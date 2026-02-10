@@ -139,6 +139,20 @@ Force a fresh SSO flow and skip cache:
 roleman --no-cache
 ```
 
+After SSO auth completes, optionally close the auth tab and refocus your terminal:
+
+```sh
+roleman --no-cache --close-auth-tab --focus-terminal-after-auth
+```
+
+If auto-detection misses your terminal app, set `ROLEMAN_TERMINAL_APP` (for example: `ROLEMAN_TERMINAL_APP="iTerm"`).
+
+Post-auth automation defaults:
+- Terminal refocus is enabled by default (`focus_terminal_after_auth = true` when unset).
+- Browser tab close is disabled by default (`close_auth_tab = false` when unset).
+- CLI flags `--focus-terminal-after-auth` and `--close-auth-tab` force-enable for one run.
+- These flags are available on `roleman`, `roleman set`, and `roleman open`.
+
 Temporarily ignore configured account/role filters:
 
 ```sh
@@ -193,6 +207,8 @@ default_identity = "work"
 refresh_seconds = 300
 hook_prompt = "always"
 selector_sort = "dynamic"
+focus_terminal_after_auth = true
+close_auth_tab = false
 
 [[identities]]
 name = "work"
@@ -211,14 +227,18 @@ Notes:
 - Higher `precedence` appears first.
 - `hook_prompt` values: `always`, `outdated`, `never`.
 - `selector_sort` values: `dynamic`, `alphabetical` (default: `dynamic`).
+- `focus_terminal_after_auth` and `close_auth_tab` set post-login desktop automation defaults (built-in defaults are `true` and `false` when omitted).
+- `--focus-terminal-after-auth` and `--close-auth-tab` force-enable those actions for one run.
+- `--close-auth-tab` is guarded: it only closes when the active browser context looks like a loopback auth tab (`127.0.0.1`/`localhost`).
+- On macOS, `--close-auth-tab` may require Automation permission; roleman remembers successful authorization in its cache (`$XDG_CACHE_HOME/roleman`).
 - Use `--show-all` to bypass account/role filters for one run.
 
 ## Command Reference
 
 ```text
-roleman [--sso-start-url <url>] [--sso-region <region>] [--account <name>] [--no-cache] [--show-all] [--sort <dynamic|alphabetical>] [-q|--query <term>] [--refresh-seconds <n>] [--env-file <path>] [--print] [--config <path>]
-roleman set|s [--account <name>] [--sort <dynamic|alphabetical>] [-q|--query <term>]
-roleman open|o [--account <name>] [--sort <dynamic|alphabetical>] [-q|--query <term>]
+roleman [--sso-start-url <url>] [--sso-region <region>] [--account <name>] [--no-cache] [--show-all] [--sort <dynamic|alphabetical>] [-q|--query <term>] [--refresh-seconds <n>] [--env-file <path>] [--print] [--focus-terminal-after-auth] [--close-auth-tab] [--config <path>]
+roleman set|s [same options as roleman]
+roleman open|o [same options as roleman]
 roleman hook [zsh|bash|fish]
 roleman install-hook [--force] [--alias]
 roleman unset|u

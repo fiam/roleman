@@ -46,6 +46,8 @@
 - Always run `cargo deny check advisories bans sources` before committing.
 - Always use Conventional Commits for commit messages.
 - Write a medium-length commit body with every commit message.
+- Do not edit `CHANGELOG.md` manually; it is managed automatically from Conventional Commits.
+- Keep commit message formatting idiomatic: subject line around 50 characters, and wrap body lines at ~72 characters.
 - PRs should include a clear description of changes, how to test, and any relevant screenshots or logs if behavior changes.
 
 ## Configuration & UX Notes

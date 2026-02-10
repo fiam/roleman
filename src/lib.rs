@@ -3,6 +3,7 @@ mod aws_config;
 pub mod aws_sdk;
 pub mod config;
 mod credentials_cache;
+mod desktop;
 mod error;
 pub mod history;
 mod model;
@@ -39,6 +40,8 @@ pub struct AppOptions {
     pub ignore_cache: bool,
     pub env_file: Option<PathBuf>,
     pub print_env: bool,
+    pub focus_terminal_after_auth: bool,
+    pub close_auth_tab: bool,
     pub account: Option<String>,
     pub show_all: bool,
     pub initial_query: Option<String>,
@@ -58,9 +61,11 @@ impl App {
         let start_url = identity.start_url.clone();
         let refresh_seconds = self.options.refresh_seconds.or(config.refresh_seconds);
         let selector_sort = self.options.selector_sort.unwrap_or(config.selector_sort);
+        let post_login_actions = resolve_post_login_actions(&self.options, &config);
 
         let (mut cache, mut choices) =
-            fetch_choices_with_cache(&identity, self.options.ignore_cache).await?;
+            fetch_choices_with_cache(&identity, self.options.ignore_cache, post_login_actions)
+                .await?;
 
         if !self.options.show_all {
             apply_account_filters(&mut choices, &identity);
@@ -82,8 +87,12 @@ impl App {
         {
             loop {
                 tokio::time::sleep(std::time::Duration::from_secs(seconds)).await;
-                let (refreshed_cache, refreshed) =
-                    fetch_choices_with_cache(&identity, self.options.ignore_cache).await?;
+                let (refreshed_cache, refreshed) = fetch_choices_with_cache(
+                    &identity,
+                    self.options.ignore_cache,
+                    post_login_actions,
+                )
+                .await?;
                 cache = refreshed_cache;
                 visible = refreshed;
                 if !self.options.show_all {
@@ -275,8 +284,9 @@ async fn select_role_async(
 async fn fetch_choices_with_cache(
     identity: &SsoIdentity,
     ignore_cache: bool,
+    post_login_actions: aws_cli::PostLoginActions,
 ) -> Result<(crate::model::CacheEntry, Vec<RoleChoice>)> {
-    let cache = cache_token(identity, ignore_cache).await?;
+    let cache = cache_token(identity, ignore_cache, post_login_actions).await?;
     let mut cached_fallback: Option<(Vec<RoleChoice>, std::time::Duration)> = None;
     if !ignore_cache
         && let Some((choices, age)) = roles_cache::load_cached_roles(&identity.start_url)?
@@ -369,6 +379,7 @@ async fn fetch_choices_with_cache(
 async fn cache_token(
     identity: &SsoIdentity,
     ignore_cache: bool,
+    post_login_actions: aws_cli::PostLoginActions,
 ) -> Result<crate::model::CacheEntry> {
     let ignore_sso_cache = env_truthy("ROLEMAN_IGNORE_SSO_CACHE");
     if !ignore_cache
@@ -384,7 +395,7 @@ async fn cache_token(
         );
     }
     let session = aws_config::ensure_sso_session(identity)?;
-    aws_cli::sso_login_session(&session)?;
+    aws_cli::sso_login_session(&session, post_login_actions)?;
     sso_cache::load_valid_cache(&identity.start_url)
 }
 
@@ -399,12 +410,21 @@ fn env_truthy(key: &str) -> bool {
     )
 }
 
+fn resolve_post_login_actions(options: &AppOptions, config: &Config) -> aws_cli::PostLoginActions {
+    aws_cli::PostLoginActions {
+        focus_terminal: options.focus_terminal_after_auth
+            || config.focus_terminal_after_auth.unwrap_or(true),
+        close_browser_tab: options.close_auth_tab || config.close_auth_tab.unwrap_or(false),
+    }
+}
+
 #[cfg(test)]
 mod test_support;
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::SelectorSortMode;
     use tempfile::TempDir;
 
     #[test]
@@ -520,6 +540,67 @@ mod tests {
         assert!(has_single_role_for_account(&choices, "1111"));
         assert!(!has_single_role_for_account(&choices, "2222"));
         assert!(!has_single_role_for_account(&choices, "3333"));
+    }
+
+    #[test]
+    fn resolves_post_login_actions_from_config_defaults() {
+        let config = Config {
+            identities: Vec::new(),
+            default_identity: None,
+            refresh_seconds: None,
+            focus_terminal_after_auth: Some(true),
+            close_auth_tab: Some(false),
+            prompt_for_hook: None,
+            hook_prompt: None,
+            selector_sort: SelectorSortMode::Dynamic,
+        };
+        let options = AppOptions::default();
+
+        let actions = resolve_post_login_actions(&options, &config);
+        assert!(actions.focus_terminal);
+        assert!(!actions.close_browser_tab);
+    }
+
+    #[test]
+    fn resolves_post_login_actions_from_builtin_defaults() {
+        let config = Config {
+            identities: Vec::new(),
+            default_identity: None,
+            refresh_seconds: None,
+            focus_terminal_after_auth: None,
+            close_auth_tab: None,
+            prompt_for_hook: None,
+            hook_prompt: None,
+            selector_sort: SelectorSortMode::Dynamic,
+        };
+        let options = AppOptions::default();
+
+        let actions = resolve_post_login_actions(&options, &config);
+        assert!(actions.focus_terminal);
+        assert!(!actions.close_browser_tab);
+    }
+
+    #[test]
+    fn cli_post_login_flags_override_config_defaults() {
+        let config = Config {
+            identities: Vec::new(),
+            default_identity: None,
+            refresh_seconds: None,
+            focus_terminal_after_auth: Some(false),
+            close_auth_tab: Some(false),
+            prompt_for_hook: None,
+            hook_prompt: None,
+            selector_sort: SelectorSortMode::Dynamic,
+        };
+        let options = AppOptions {
+            focus_terminal_after_auth: true,
+            close_auth_tab: true,
+            ..AppOptions::default()
+        };
+
+        let actions = resolve_post_login_actions(&options, &config);
+        assert!(actions.focus_terminal);
+        assert!(actions.close_browser_tab);
     }
 }
 

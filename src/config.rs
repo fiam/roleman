@@ -11,6 +11,8 @@ pub struct Config {
     pub identities: Vec<SsoIdentity>,
     pub default_identity: Option<String>,
     pub refresh_seconds: Option<u64>,
+    pub focus_terminal_after_auth: Option<bool>,
+    pub close_auth_tab: Option<bool>,
     pub prompt_for_hook: Option<bool>,
     pub hook_prompt: Option<HookPromptMode>,
     #[serde(default)]
@@ -118,6 +120,8 @@ mod tests {
             }],
             default_identity: Some("work".into()),
             refresh_seconds: Some(120),
+            focus_terminal_after_auth: Some(true),
+            close_auth_tab: Some(false),
             prompt_for_hook: None,
             hook_prompt: None,
             selector_sort: SelectorSortMode::Alphabetical,
@@ -128,6 +132,11 @@ mod tests {
         assert_eq!(loaded.identities, config.identities);
         assert_eq!(loaded.default_identity, config.default_identity);
         assert_eq!(loaded.refresh_seconds, config.refresh_seconds);
+        assert_eq!(
+            loaded.focus_terminal_after_auth,
+            config.focus_terminal_after_auth
+        );
+        assert_eq!(loaded.close_auth_tab, config.close_auth_tab);
         assert_eq!(loaded.selector_sort, config.selector_sort);
     }
 
@@ -143,6 +152,8 @@ mod tests {
         let (config, path) = Config::load(None).unwrap();
         assert!(config.identities.is_empty());
         assert_eq!(config.selector_sort, SelectorSortMode::Dynamic);
+        assert_eq!(config.focus_terminal_after_auth, None);
+        assert_eq!(config.close_auth_tab, None);
         assert_eq!(path, temp.path().join("roleman").join("config.toml"));
 
         unsafe {
