@@ -29,6 +29,7 @@ pub enum AppAction {
     #[default]
     Set,
     Open,
+    Login,
 }
 
 #[derive(Debug, Default)]
@@ -62,6 +63,11 @@ impl App {
         let refresh_seconds = self.options.refresh_seconds.or(config.refresh_seconds);
         let selector_sort = self.options.selector_sort.unwrap_or(config.selector_sort);
         let post_login_actions = resolve_post_login_actions(&self.options, &config);
+
+        if matches!(self.options.action, AppAction::Login) {
+            cache_token(&identity, self.options.ignore_cache, post_login_actions).await?;
+            return Ok(());
+        }
 
         let (mut cache, mut choices) =
             fetch_choices_with_cache(&identity, self.options.ignore_cache, post_login_actions)
@@ -117,6 +123,7 @@ impl App {
         let prompt = match self.options.action {
             AppAction::Set => "roleman> ",
             AppAction::Open => "roleman open> ",
+            AppAction::Login => unreachable!("login exits before role selection"),
         };
         let selected = select_role_async(
             prompt,
@@ -210,6 +217,7 @@ impl App {
                     eprintln!("{}", ui::action(&format!("Opening {url}")));
                     open_in_browser(&url)?;
                 }
+                AppAction::Login => unreachable!("login exits before role selection"),
             }
         }
 
@@ -602,6 +610,25 @@ mod tests {
         assert!(actions.focus_terminal);
         assert!(actions.close_browser_tab);
     }
+
+    #[test]
+    fn login_manual_identity_skips_config_save_prompt() {
+        let temp = TempDir::new().unwrap();
+        let config_path = temp.path().join("config.toml");
+        let mut config = Config::default();
+        let options = AppOptions {
+            start_url: Some("https://acme.awsapps.com/start".into()),
+            sso_region: Some("us-east-1".into()),
+            action: AppAction::Login,
+            ..AppOptions::default()
+        };
+
+        let identity = resolve_identity(&options, &mut config, &config_path, false).unwrap();
+
+        assert_eq!(identity.name, "manual");
+        assert!(config.identities.is_empty());
+        assert!(!config_path.exists());
+    }
 }
 
 fn resolve_identity(
@@ -628,7 +655,10 @@ fn resolve_identity(
             accounts: Vec::new(),
             ignore_roles: Vec::new(),
         };
-        if !config_exists && config.identities.is_empty() {
+        if !matches!(options.action, AppAction::Login)
+            && !config_exists
+            && config.identities.is_empty()
+        {
             maybe_save_account(config, config_path, &identity)?;
         }
         return Ok(identity);

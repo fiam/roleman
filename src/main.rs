@@ -17,9 +17,9 @@ use tracing_subscriber::prelude::*;
 #[command(
     name = "roleman",
     about = "Select an AWS IAM Identity Center role and export temporary AWS credentials",
-    long_about = "Roleman lets you pick an AWS IAM Identity Center (AWS SSO) account and role, then emits shell exports for temporary AWS credentials.\n\nUse `roleman` for interactive credential export, `roleman open` to open the selected role in the AWS access portal, and `roleman hook`/`roleman install-hook` for shell integration.",
+    long_about = "Roleman lets you pick an AWS IAM Identity Center (AWS SSO) account and role, then emits shell exports for temporary AWS credentials.\n\nUse `roleman` for interactive credential export, `roleman login` to ensure you have a valid IAM Identity Center session, `roleman open` to open the selected role in the AWS access portal, and `roleman hook`/`roleman install-hook` for shell integration.",
     disable_help_subcommand = true,
-    after_help = "Examples:\n  roleman\n  roleman --account prod\n  roleman -q sandbox\n  roleman --no-cache --print\n  roleman --no-cache --close-auth-tab --focus-terminal-after-auth\n  roleman --sso-start-url https://acme.awsapps.com/start --sso-region us-east-1\n  roleman open\n  roleman hook\n  roleman install-hook --alias"
+    after_help = "Examples:\n  roleman\n  roleman --account prod\n  roleman -q sandbox\n  roleman --no-cache --print\n  roleman --no-cache --close-auth-tab --focus-terminal-after-auth\n  roleman --sso-start-url https://acme.awsapps.com/start --sso-region us-east-1\n  roleman login\n  roleman login --account prod\n  roleman open\n  roleman hook\n  roleman install-hook --alias"
 )]
 struct Cli {
     #[command(subcommand)]
@@ -128,6 +128,12 @@ enum CliCommand {
         after_help = "Examples:\n  roleman open\n  roleman open prod\n  roleman open --account prod\n  roleman open -q prod-admin"
     )]
     Open(RunSubcommandArgs),
+    #[command(
+        about = "Ensure there is a valid IAM Identity Center session",
+        long_about = "Resolve the selected IAM Identity Center identity, reuse a valid cached SSO token if present, or trigger the AWS SSO login flow if not. This command exits after authentication succeeds or fails.",
+        after_help = "Examples:\n  roleman login\n  roleman login prod\n  roleman login --account prod\n  roleman login --no-cache"
+    )]
+    Login(RunSubcommandArgs),
     #[command(
         about = "Print shell hook code for shell integration",
         long_about = "Print the shell hook script to stdout. If no shell is provided, roleman auto-detects it from $SHELL.",
@@ -269,7 +275,9 @@ fn main() {
     }
 
     let options = build_app_options(&cli);
-    maybe_prompt_install_hook(options.config_path.as_deref());
+    if !matches!(options.action, AppAction::Login) {
+        maybe_prompt_install_hook(options.config_path.as_deref());
+    }
 
     let runtime = tokio::runtime::Runtime::new().expect("failed to start runtime");
     let result = runtime.block_on(App::new(options).run());
@@ -290,6 +298,10 @@ fn build_app_options(cli: &Cli) -> AppOptions {
         Some(CliCommand::Open(args)) => {
             let common = merge_common_args(&cli.common, &args.common);
             app_options_from_parts(&common, AppAction::Open, args.account.clone())
+        }
+        Some(CliCommand::Login(args)) => {
+            let common = merge_common_args(&cli.common, &args.common);
+            app_options_from_parts(&common, AppAction::Login, args.account.clone())
         }
         _ => app_options_from_parts(&cli.common, AppAction::Set, None),
     }
@@ -702,6 +714,15 @@ mod tests {
         let options = build_app_options(&cli);
         assert_eq!(options.account.as_deref(), Some("prod"));
         assert!(matches!(options.action, AppAction::Open));
+    }
+
+    #[test]
+    fn parses_login_with_positional_account() {
+        let cli =
+            Cli::try_parse_from(["roleman", "login", "prod"]).expect("expected login to parse");
+        let options = build_app_options(&cli);
+        assert_eq!(options.account.as_deref(), Some("prod"));
+        assert!(matches!(options.action, AppAction::Login));
     }
 
     #[test]
