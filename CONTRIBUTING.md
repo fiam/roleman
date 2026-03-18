@@ -4,11 +4,11 @@ Thanks for contributing to Roleman. This guide explains how to develop, test, an
 
 ## Development
 
-- Prerequisites: Rust stable, `cargo`, and (optionally) `cargo-release`/`cargo-dist`.
+- Prerequisites: Rust 1.94.0, `cargo`, and (optionally) `cargo-release`/`cargo-dist`.
 - Install dependencies:
 
 ```sh
-rustup update stable
+rustup toolchain install 1.94.0
 ```
 
 - Build and run locally:
