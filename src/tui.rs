@@ -44,8 +44,7 @@ pub fn select_role(
         return Ok(None);
     }
 
-    let mut ordered = choices.to_vec();
-    ordered.reverse();
+    let ordered = ordered_choices_for_skim(choices);
     debug!(count = ordered.len(), "starting role selection");
     let initial_query = normalize_initial_query(initial_query);
     let max_height = std::env::var("LINES")
@@ -107,6 +106,12 @@ pub fn select_role(
         open_in_browser,
         auto_selected: false,
     }))
+}
+
+fn ordered_choices_for_skim(choices: &[RoleChoice]) -> Vec<RoleChoice> {
+    // Skim's default layout already renders the list bottom-to-top.
+    // Preserve the input order so the first choice stays anchored at the bottom.
+    choices.to_vec()
 }
 
 fn normalize_initial_query(initial_query: Option<&str>) -> Option<String> {
@@ -282,6 +287,27 @@ mod tests {
 
         let matched = find_single_query_match(&options, &choices, "admin");
         assert!(matched.is_none());
+    }
+
+    #[test]
+    fn preserves_input_order_for_bottom_to_top_layout() {
+        let choices = vec![
+            RoleChoice {
+                account_id: "111111111111".into(),
+                account_name: "Platform".into(),
+                role_name: "Admin".into(),
+            },
+            RoleChoice {
+                account_id: "222222222222".into(),
+                account_name: "Sandbox".into(),
+                role_name: "ReadOnly".into(),
+            },
+        ];
+
+        let ordered = ordered_choices_for_skim(&choices);
+
+        assert_eq!(ordered[0].account_name, "Platform");
+        assert_eq!(ordered[1].account_name, "Sandbox");
     }
 
     #[test]
