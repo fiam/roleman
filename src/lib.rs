@@ -15,7 +15,8 @@ pub mod ui;
 pub use crate::config::Config;
 use crate::config::{SelectorSortMode, SsoIdentity};
 pub use crate::error::{Error, Result};
-use crate::model::{EnvVars, RoleChoice};
+pub use crate::model::RoleChoice;
+use crate::model::{CacheEntry, EnvVars};
 use futures::StreamExt;
 use std::path::{Path, PathBuf};
 use tracing::debug;
@@ -30,6 +31,7 @@ pub enum AppAction {
     Set,
     Open,
     Login,
+    List,
 }
 
 #[derive(Debug, Default)]
@@ -55,13 +57,14 @@ impl App {
         Self { options }
     }
 
+    pub async fn list_roles(&self) -> Result<Vec<RoleChoice>> {
+        Ok(self.prepare_visible_roles().await?.visible)
+    }
+
     pub async fn run(&self) -> Result<()> {
         let (mut config, config_path) = Config::load(self.options.config_path.as_deref())?;
         let config_exists = config_path.exists();
         let identity = resolve_identity(&self.options, &mut config, &config_path, config_exists)?;
-        let start_url = identity.start_url.clone();
-        let refresh_seconds = self.options.refresh_seconds.or(config.refresh_seconds);
-        let selector_sort = self.options.selector_sort.unwrap_or(config.selector_sort);
         let post_login_actions = resolve_post_login_actions(&self.options, &config);
 
         if matches!(self.options.action, AppAction::Login) {
@@ -69,67 +72,19 @@ impl App {
             return Ok(());
         }
 
-        let (mut cache, mut choices) =
-            fetch_choices_with_cache(&identity, self.options.ignore_cache, post_login_actions)
-                .await?;
-
-        if !self.options.show_all {
-            apply_account_filters(&mut choices, &identity);
-        }
-        sort_choices(&mut choices, &identity);
-        if matches!(selector_sort, SelectorSortMode::Dynamic)
-            && let Err(err) = history::apply_history_sort(
-                &mut choices,
-                &identity.name,
-                self.options.initial_query.as_deref(),
-            )
-        {
-            debug!(error = %err, "failed to apply history sort");
-        }
-
-        let mut visible = choices;
-        if visible.is_empty()
-            && let Some(seconds) = refresh_seconds
-        {
-            loop {
-                tokio::time::sleep(std::time::Duration::from_secs(seconds)).await;
-                let (refreshed_cache, refreshed) = fetch_choices_with_cache(
-                    &identity,
-                    self.options.ignore_cache,
-                    post_login_actions,
-                )
-                .await?;
-                cache = refreshed_cache;
-                visible = refreshed;
-                if !self.options.show_all {
-                    apply_account_filters(&mut visible, &identity);
-                }
-                sort_choices(&mut visible, &identity);
-                if matches!(selector_sort, SelectorSortMode::Dynamic)
-                    && let Err(err) = history::apply_history_sort(
-                        &mut visible,
-                        &identity.name,
-                        self.options.initial_query.as_deref(),
-                    )
-                {
-                    debug!(error = %err, "failed to apply history sort");
-                }
-                if !visible.is_empty() {
-                    break;
-                }
-            }
-        }
+        let context = self.prepare_visible_roles().await?;
 
         let prompt = match self.options.action {
             AppAction::Set => "roleman> ",
             AppAction::Open => "roleman open> ",
             AppAction::Login => unreachable!("login exits before role selection"),
+            AppAction::List => unreachable!("list is handled by App::list_roles"),
         };
         let selected = select_role_async(
             prompt,
-            &visible,
-            &start_url,
-            &cache.region,
+            &context.visible,
+            &context.start_url,
+            &context.cache.region,
             self.options.initial_query.as_deref(),
         )
         .await?;
@@ -151,7 +106,7 @@ impl App {
                 debug!(error = %err, "failed to record history selection");
             }
             if matches!(self.options.action, AppAction::Set) && selection.open_in_browser {
-                let url = console_url(&start_url, &choice.account_id, &choice.role_name);
+                let url = console_url(&context.start_url, &choice.account_id, &choice.role_name);
                 eprintln!("{}", ui::action(&format!("Opening {url}")));
                 open_in_browser(&url)?;
                 return Ok(());
@@ -162,8 +117,8 @@ impl App {
                         None
                     } else {
                         credentials_cache::load_cached_credentials(
-                            &start_url,
-                            &cache.region,
+                            &context.start_url,
+                            &context.cache.region,
                             &choice.account_id,
                             &choice.role_name,
                         )?
@@ -176,16 +131,16 @@ impl App {
                         tracing::debug!("fetching role credentials");
                         let spinner = ui::spinner("Fetching role credentials...");
                         let fresh = aws_sdk::get_role_credentials(
-                            &cache.access_token,
-                            &cache.region,
+                            &context.cache.access_token,
+                            &context.cache.region,
                             &choice.account_id,
                             &choice.role_name,
                         )
                         .await?;
                         spinner.finish_with_message(ui::success("Fetched role credentials"));
                         credentials_cache::save_cached_credentials(
-                            &start_url,
-                            &cache.region,
+                            &context.start_url,
+                            &context.cache.region,
                             &choice.account_id,
                             &choice.role_name,
                             &fresh,
@@ -193,15 +148,20 @@ impl App {
                         tracing::debug!("role credentials received");
                         fresh
                     };
-                    let omit_role_name = has_single_role_for_account(&visible, &choice.account_id);
+                    let omit_role_name =
+                        has_single_role_for_account(&context.visible, &choice.account_id);
                     let profile_name = aws_config::profile_name_for(&choice, omit_role_name);
                     aws_config::ensure_role_profile(
                         &profile_name,
                         &choice,
                         &identity,
-                        &cache.region,
+                        &context.cache.region,
                     )?;
-                    let env = EnvVars::from_role_credentials(&creds, &profile_name, &cache.region);
+                    let env = EnvVars::from_role_credentials(
+                        &creds,
+                        &profile_name,
+                        &context.cache.region,
+                    );
                     if let Some(path) = env_file_path(&self.options) {
                         tracing::debug!(path = %path.display(), "writing env file");
                         write_env_file(&path, &env)?;
@@ -213,16 +173,79 @@ impl App {
                     }
                 }
                 AppAction::Open => {
-                    let url = console_url(&start_url, &choice.account_id, &choice.role_name);
+                    let url =
+                        console_url(&context.start_url, &choice.account_id, &choice.role_name);
                     eprintln!("{}", ui::action(&format!("Opening {url}")));
                     open_in_browser(&url)?;
                 }
                 AppAction::Login => unreachable!("login exits before role selection"),
+                AppAction::List => unreachable!("list is handled by App::list_roles"),
             }
         }
 
         Ok(())
     }
+
+    async fn prepare_visible_roles(&self) -> Result<RoleSelectionContext> {
+        let (mut config, config_path) = Config::load(self.options.config_path.as_deref())?;
+        let config_exists = config_path.exists();
+        let identity = resolve_identity(&self.options, &mut config, &config_path, config_exists)?;
+        let start_url = identity.start_url.clone();
+        let refresh_seconds = self.options.refresh_seconds.or(config.refresh_seconds);
+        let selector_sort = self.options.selector_sort.unwrap_or(config.selector_sort);
+        let post_login_actions = resolve_post_login_actions(&self.options, &config);
+
+        let (mut cache, mut choices) =
+            fetch_choices_with_cache(&identity, self.options.ignore_cache, post_login_actions)
+                .await?;
+
+        apply_visible_role_preferences(
+            &mut choices,
+            &identity,
+            self.options.show_all,
+            selector_sort,
+            self.options.initial_query.as_deref(),
+        );
+
+        let mut visible = choices;
+        if visible.is_empty()
+            && let Some(seconds) = refresh_seconds
+        {
+            loop {
+                tokio::time::sleep(std::time::Duration::from_secs(seconds)).await;
+                let (refreshed_cache, mut refreshed) = fetch_choices_with_cache(
+                    &identity,
+                    self.options.ignore_cache,
+                    post_login_actions,
+                )
+                .await?;
+                cache = refreshed_cache;
+                apply_visible_role_preferences(
+                    &mut refreshed,
+                    &identity,
+                    self.options.show_all,
+                    selector_sort,
+                    self.options.initial_query.as_deref(),
+                );
+                visible = refreshed;
+                if !visible.is_empty() {
+                    break;
+                }
+            }
+        }
+
+        Ok(RoleSelectionContext {
+            start_url,
+            cache,
+            visible,
+        })
+    }
+}
+
+struct RoleSelectionContext {
+    start_url: String,
+    cache: CacheEntry,
+    visible: Vec<RoleChoice>,
 }
 
 fn write_env_file(path: &PathBuf, env: &EnvVars) -> Result<()> {
@@ -416,6 +439,24 @@ fn env_truthy(key: &str) -> bool {
         value.trim().to_lowercase().as_str(),
         "1" | "true" | "yes" | "on"
     )
+}
+
+fn apply_visible_role_preferences(
+    choices: &mut Vec<RoleChoice>,
+    identity: &SsoIdentity,
+    show_all: bool,
+    selector_sort: SelectorSortMode,
+    initial_query: Option<&str>,
+) {
+    if !show_all {
+        apply_account_filters(choices, identity);
+    }
+    sort_choices(choices, identity);
+    if matches!(selector_sort, SelectorSortMode::Dynamic)
+        && let Err(err) = history::apply_history_sort(choices, &identity.name, initial_query)
+    {
+        debug!(error = %err, "failed to apply history sort");
+    }
 }
 
 fn resolve_post_login_actions(options: &AppOptions, config: &Config) -> aws_cli::PostLoginActions {
@@ -629,6 +670,25 @@ mod tests {
         assert!(config.identities.is_empty());
         assert!(!config_path.exists());
     }
+
+    #[test]
+    fn list_manual_identity_skips_config_save_prompt() {
+        let temp = TempDir::new().unwrap();
+        let config_path = temp.path().join("config.toml");
+        let mut config = Config::default();
+        let options = AppOptions {
+            start_url: Some("https://acme.awsapps.com/start".into()),
+            sso_region: Some("us-east-1".into()),
+            action: AppAction::List,
+            ..AppOptions::default()
+        };
+
+        let identity = resolve_identity(&options, &mut config, &config_path, false).unwrap();
+
+        assert_eq!(identity.name, "manual");
+        assert!(config.identities.is_empty());
+        assert!(!config_path.exists());
+    }
 }
 
 fn resolve_identity(
@@ -655,7 +715,7 @@ fn resolve_identity(
             accounts: Vec::new(),
             ignore_roles: Vec::new(),
         };
-        if !matches!(options.action, AppAction::Login)
+        if !matches!(options.action, AppAction::Login | AppAction::List)
             && !config_exists
             && config.identities.is_empty()
         {

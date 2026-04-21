@@ -1,4 +1,4 @@
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone)]
 pub struct CacheEntry {
@@ -18,7 +18,7 @@ pub struct Role {
     pub name: String,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct RoleChoice {
     pub account_id: String,
     pub account_name: String,

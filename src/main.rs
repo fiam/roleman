@@ -1,3 +1,4 @@
+use std::fmt::Write as _;
 use std::fs::OpenOptions;
 use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
@@ -17,9 +18,9 @@ use tracing_subscriber::prelude::*;
 #[command(
     name = "roleman",
     about = "Select an AWS IAM Identity Center role and export temporary AWS credentials",
-    long_about = "Roleman lets you pick an AWS IAM Identity Center (AWS SSO) account and role, then emits shell exports for temporary AWS credentials.\n\nUse `roleman` for interactive credential export, `roleman login` to ensure you have a valid IAM Identity Center session, `roleman open` to open the selected role in the AWS access portal, and `roleman hook`/`roleman install-hook` for shell integration.",
+    long_about = "Roleman lets you pick an AWS IAM Identity Center (AWS SSO) account and role, then emits shell exports for temporary AWS credentials.\n\nUse `roleman` for interactive credential export, `roleman login` to ensure you have a valid IAM Identity Center session, `roleman list` to inspect available account and role combinations, `roleman open` to open the selected role in the AWS access portal, and `roleman hook`/`roleman install-hook` for shell integration.",
     disable_help_subcommand = true,
-    after_help = "Examples:\n  roleman\n  roleman --account prod\n  roleman -q sandbox\n  roleman --no-cache --print\n  roleman --no-cache --close-auth-tab --focus-terminal-after-auth\n  roleman --sso-start-url https://acme.awsapps.com/start --sso-region us-east-1\n  roleman login\n  roleman login --account prod\n  roleman open\n  roleman hook\n  roleman install-hook --alias"
+    after_help = "Examples:\n  roleman\n  roleman --account prod\n  roleman -q sandbox\n  roleman --no-cache --print\n  roleman --no-cache --close-auth-tab --focus-terminal-after-auth\n  roleman --sso-start-url https://acme.awsapps.com/start --sso-region us-east-1\n  roleman login\n  roleman login --account prod\n  roleman list\n  roleman list --format json\n  roleman open\n  roleman hook\n  roleman install-hook --alias"
 )]
 struct Cli {
     #[command(subcommand)]
@@ -135,6 +136,13 @@ enum CliCommand {
     )]
     Login(RunSubcommandArgs),
     #[command(
+        alias = "ls",
+        about = "List available account and role combinations",
+        long_about = "Resolve the selected IAM Identity Center identity and print the available account/role combinations.\n\nThe default output is a text table. Use `--format json` for machine-readable output.",
+        after_help = "Examples:\n  roleman list\n  roleman list prod\n  roleman list --account prod --show-all\n  roleman list --format json"
+    )]
+    List(ListArgs),
+    #[command(
         about = "Print shell hook code for shell integration",
         long_about = "Print the shell hook script to stdout. If no shell is provided, roleman auto-detects it from $SHELL.",
         after_help = "Examples:\n  eval \"$(roleman hook)\"\n  eval \"$(roleman hook zsh)\"\n  roleman hook fish | source"
@@ -185,10 +193,95 @@ struct RunSubcommandArgs {
     account: Option<String>,
 }
 
+#[derive(Debug, Args)]
+struct ListArgs {
+    #[arg(
+        long = "sso-start-url",
+        help = "IAM Identity Center start URL to use for this run"
+    )]
+    sso_start_url: Option<String>,
+
+    #[arg(
+        long = "sso-region",
+        help = "IAM Identity Center region (for example: us-east-1)"
+    )]
+    sso_region: Option<String>,
+
+    #[arg(
+        short = 'a',
+        long = "account",
+        help = "Configured identity name to use instead of default_identity"
+    )]
+    account: Option<String>,
+
+    #[arg(
+        long = "no-cache",
+        help = "Ignore role/token caches and force refresh or sign-in"
+    )]
+    no_cache: bool,
+
+    #[arg(
+        long = "show-all",
+        help = "Ignore configured account/role filters for this run"
+    )]
+    show_all: bool,
+
+    #[arg(
+        long = "sort",
+        value_enum,
+        value_name = "mode",
+        help = "Listing order (overrides config selector_sort)"
+    )]
+    sort: Option<SortArg>,
+
+    #[arg(
+        long = "refresh-seconds",
+        help = "Polling interval in seconds while waiting for available roles"
+    )]
+    refresh_seconds: Option<u64>,
+
+    #[arg(
+        long = "focus-terminal-after-auth",
+        help = "After successful SSO auth, try to bring your terminal app back to front"
+    )]
+    focus_terminal_after_auth: bool,
+
+    #[arg(
+        long = "close-auth-tab",
+        help = "After successful SSO auth, try to close the frontmost browser tab before refocusing terminal"
+    )]
+    close_auth_tab: bool,
+
+    #[arg(long = "config", help = "Path to config.toml")]
+    config_path: Option<PathBuf>,
+
+    #[arg(
+        value_name = "account",
+        id = "command_account",
+        help = "Configured identity name to use instead of default_identity"
+    )]
+    command_account: Option<String>,
+
+    #[arg(
+        long,
+        value_enum,
+        default_value_t = OutputFormatArg::Text,
+        help = "Output format"
+    )]
+    format: OutputFormatArg,
+}
+
 #[derive(Debug, Clone, Copy, ValueEnum)]
 enum SortArg {
     Dynamic,
     Alphabetical,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum, Default)]
+enum OutputFormatArg {
+    #[default]
+    Text,
+    Json,
 }
 
 impl From<SortArg> for SelectorSortMode {
@@ -275,7 +368,15 @@ fn main() {
     }
 
     let options = build_app_options(&cli);
-    if !matches!(options.action, AppAction::Login) {
+    if let Some(CliCommand::List(args)) = &cli.command {
+        if let Err(err) = handle_list(args, options) {
+            eprintln!("error: {err}");
+            std::process::exit(1);
+        }
+        return;
+    }
+
+    if matches!(options.action, AppAction::Set | AppAction::Open) {
         maybe_prompt_install_hook(options.config_path.as_deref());
     }
 
@@ -302,6 +403,10 @@ fn build_app_options(cli: &Cli) -> AppOptions {
         Some(CliCommand::Login(args)) => {
             let common = merge_common_args(&cli.common, &args.common);
             app_options_from_parts(&common, AppAction::Login, args.account.clone())
+        }
+        Some(CliCommand::List(args)) => {
+            let common = merge_list_args(&cli.common, args);
+            app_options_from_parts(&common, AppAction::List, args.command_account.clone())
         }
         _ => app_options_from_parts(&cli.common, AppAction::Set, None),
     }
@@ -355,6 +460,34 @@ fn merge_common_args(parent: &CommonArgs, child: &CommonArgs) -> CommonArgs {
             || parent.focus_terminal_after_auth,
         close_auth_tab: child.close_auth_tab || parent.close_auth_tab,
         config_path: child
+            .config_path
+            .clone()
+            .or_else(|| parent.config_path.clone()),
+    }
+}
+
+fn merge_list_args(parent: &CommonArgs, args: &ListArgs) -> CommonArgs {
+    CommonArgs {
+        sso_start_url: args
+            .sso_start_url
+            .clone()
+            .or_else(|| parent.sso_start_url.clone()),
+        sso_region: args
+            .sso_region
+            .clone()
+            .or_else(|| parent.sso_region.clone()),
+        account: args.account.clone().or_else(|| parent.account.clone()),
+        no_cache: args.no_cache || parent.no_cache,
+        show_all: args.show_all || parent.show_all,
+        sort: args.sort.or(parent.sort),
+        initial_query: None,
+        refresh_seconds: args.refresh_seconds.or(parent.refresh_seconds),
+        env_file: None,
+        print_env: false,
+        focus_terminal_after_auth: args.focus_terminal_after_auth
+            || parent.focus_terminal_after_auth,
+        close_auth_tab: args.close_auth_tab || parent.close_auth_tab,
+        config_path: args
             .config_path
             .clone()
             .or_else(|| parent.config_path.clone()),
@@ -419,12 +552,33 @@ fn handle_history(args: &HistoryArgs) -> Result<(), String> {
     Ok(())
 }
 
+fn handle_list(args: &ListArgs, options: AppOptions) -> Result<(), String> {
+    let runtime = tokio::runtime::Runtime::new().map_err(|err| err.to_string())?;
+    let roles = runtime
+        .block_on(App::new(options).list_roles())
+        .map_err(|err| err.to_string())?;
+    match args.format {
+        OutputFormatArg::Text => {
+            if roles.is_empty() {
+                println!("No roles available.");
+            } else {
+                print_role_table(&roles);
+            }
+        }
+        OutputFormatArg::Json => {
+            let json = serde_json::to_string_pretty(&roles).map_err(|err| err.to_string())?;
+            println!("{json}");
+        }
+    }
+    Ok(())
+}
+
 fn print_history_table(entries: &[history::HistoryEntry]) {
     let headers = ["Timestamp", "Identity", "Account", "Role", "Cwd"];
-    let rows: Vec<[String; 5]> = entries
+    let rows: Vec<Vec<String>> = entries
         .iter()
         .map(|entry| {
-            [
+            vec![
                 history::format_timestamp(entry.selected_at_unix),
                 entry.identity.clone(),
                 format!("{} ({})", entry.account_name, entry.account_id),
@@ -437,54 +591,70 @@ fn print_history_table(entries: &[history::HistoryEntry]) {
             ]
         })
         .collect();
+    println!("{}", format_table(&headers, &rows));
+}
 
-    let mut widths = headers.map(|header| header.len());
-    for row in &rows {
+fn print_role_table(roles: &[roleman::RoleChoice]) {
+    let headers = ["Account", "Account ID", "Role"];
+    let rows: Vec<Vec<String>> = roles
+        .iter()
+        .map(|role| {
+            vec![
+                role.account_name.clone(),
+                role.account_id.clone(),
+                role.role_name.clone(),
+            ]
+        })
+        .collect();
+    println!("{}", format_table(&headers, &rows));
+}
+
+fn format_table(headers: &[&str], rows: &[Vec<String>]) -> String {
+    debug_assert!(rows.iter().all(|row| row.len() == headers.len()));
+
+    let mut widths = headers
+        .iter()
+        .map(|header| header.len())
+        .collect::<Vec<_>>();
+    for row in rows {
         for (index, value) in row.iter().enumerate() {
             widths[index] = widths[index].max(value.len());
         }
     }
 
-    println!(
-        "{:<w0$}  {:<w1$}  {:<w2$}  {:<w3$}  {:<w4$}",
-        headers[0],
-        headers[1],
-        headers[2],
-        headers[3],
-        headers[4],
-        w0 = widths[0],
-        w1 = widths[1],
-        w2 = widths[2],
-        w3 = widths[3],
-        w4 = widths[4],
-    );
-    println!(
-        "{:-<w0$}  {:-<w1$}  {:-<w2$}  {:-<w3$}  {:-<w4$}",
-        "",
-        "",
-        "",
-        "",
-        "",
-        w0 = widths[0],
-        w1 = widths[1],
-        w2 = widths[2],
-        w3 = widths[3],
-        w4 = widths[4],
-    );
+    let mut output = String::new();
+    append_table_line(&mut output, headers.iter().copied(), &widths);
+    output.push('\n');
+    append_table_separator(&mut output, &widths);
+
     for row in rows {
-        println!(
-            "{:<w0$}  {:<w1$}  {:<w2$}  {:<w3$}  {:<w4$}",
-            row[0],
-            row[1],
-            row[2],
-            row[3],
-            row[4],
-            w0 = widths[0],
-            w1 = widths[1],
-            w2 = widths[2],
-            w3 = widths[3],
-            w4 = widths[4],
-        );
+        output.push('\n');
+        append_table_line(&mut output, row.iter().map(String::as_str), &widths);
+    }
+
+    output
+}
+
+fn append_table_line<'a, I>(output: &mut String, cells: I, widths: &[usize])
+where
+    I: IntoIterator<Item = &'a str>,
+{
+    for (index, cell) in cells.into_iter().enumerate() {
+        if index > 0 {
+            output.push_str("  ");
+        }
+        let _ = write!(output, "{cell:<width$}", width = widths[index]);
+    }
+}
+
+fn append_table_separator(output: &mut String, widths: &[usize]) {
+    for (index, width) in widths.iter().enumerate() {
+        if index > 0 {
+            output.push_str("  ");
+        }
+        for _ in 0..*width {
+            output.push('-');
+        }
     }
 }
 
@@ -678,9 +848,9 @@ fn hook_prompt_mode(config: &Config) -> HookPromptMode {
 
 #[cfg(test)]
 mod tests {
-    use super::{Cli, CliCommand, HistorySubcommand, build_app_options};
+    use super::{Cli, CliCommand, HistorySubcommand, OutputFormatArg, build_app_options};
     use clap::Parser;
-    use roleman::AppAction;
+    use roleman::{AppAction, RoleChoice};
     use std::sync::{Mutex, MutexGuard};
 
     static ENV_LOCK: Mutex<()> = Mutex::new(());
@@ -723,6 +893,14 @@ mod tests {
         let options = build_app_options(&cli);
         assert_eq!(options.account.as_deref(), Some("prod"));
         assert!(matches!(options.action, AppAction::Login));
+    }
+
+    #[test]
+    fn parses_list_with_positional_account() {
+        let cli = Cli::try_parse_from(["roleman", "list", "prod"]).expect("expected list to parse");
+        let options = build_app_options(&cli);
+        assert_eq!(options.account.as_deref(), Some("prod"));
+        assert!(matches!(options.action, AppAction::List));
     }
 
     #[test]
@@ -781,6 +959,16 @@ mod tests {
     }
 
     #[test]
+    fn parses_list_json_format_flag() {
+        let cli = Cli::try_parse_from(["roleman", "list", "--format", "json"])
+            .expect("expected list format parse");
+        match cli.command {
+            Some(CliCommand::List(args)) => assert_eq!(args.format, OutputFormatArg::Json),
+            _ => panic!("expected list command"),
+        }
+    }
+
+    #[test]
     fn parses_sort_flag() {
         let cli = Cli::try_parse_from(["roleman", "--sort", "alphabetical"])
             .expect("expected sort flag parse");
@@ -832,5 +1020,39 @@ mod tests {
                 std::env::remove_var("HOME");
             }
         }
+    }
+
+    #[test]
+    fn formats_role_table() {
+        let roles = vec![
+            RoleChoice {
+                account_id: "123456789012".into(),
+                account_name: "Platform".into(),
+                role_name: "Admin".into(),
+            },
+            RoleChoice {
+                account_id: "210987654321".into(),
+                account_name: "Sandbox".into(),
+                role_name: "ReadOnly".into(),
+            },
+        ];
+
+        let headers = ["Account", "Account ID", "Role"];
+        let rows = roles
+            .iter()
+            .map(|role| {
+                vec![
+                    role.account_name.clone(),
+                    role.account_id.clone(),
+                    role.role_name.clone(),
+                ]
+            })
+            .collect::<Vec<_>>();
+
+        let table = super::format_table(&headers, &rows);
+
+        assert!(table.contains("Account   Account ID    Role"));
+        assert!(table.contains("Platform  123456789012  Admin"));
+        assert!(table.contains("Sandbox   210987654321  ReadOnly"));
     }
 }
