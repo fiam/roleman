@@ -8,7 +8,7 @@ mod shell;
 use crate::shell::{Shell, detect_shell_from_env, shell_for_name};
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use roleman::{
-    App, AppAction, AppOptions, Config,
+    AccessScope, App, AppAction, AppOptions, Config,
     config::{HookPromptMode, SelectorSortMode},
     history, ui,
 };
@@ -62,6 +62,19 @@ struct CommonArgs {
         help = "Ignore configured account/role filters for this run"
     )]
     show_all: bool,
+
+    #[arg(
+        long = "readonly",
+        help = "Drop write access: mint scoped-down read-only credentials for the selected role"
+    )]
+    readonly: bool,
+
+    #[arg(
+        short = 'y',
+        long = "yes",
+        help = "Skip confirmation before roleman creates a cloud resource (e.g. the read-only role)"
+    )]
+    assume_yes: bool,
 
     #[arg(
         long = "sort",
@@ -178,6 +191,49 @@ enum CliCommand {
         after_help = "Examples:\n  roleman history\n  roleman history --limit 20\n  roleman history clear"
     )]
     History(HistoryArgs),
+    #[command(
+        about = "Remove cloud resources roleman created (e.g. the read-only role)",
+        long_about = "Scan the current account (using your active credentials) for resources roleman created and remove them. Operates on one account at a time — re-run after switching accounts.",
+        after_help = "Examples:\n  roleman cleanup roles\n  roleman cleanup roles --dry-run\n  roleman cleanup roles --yes"
+    )]
+    Cleanup(CleanupArgs),
+}
+
+#[derive(Debug, Args)]
+struct CleanupArgs {
+    #[command(subcommand)]
+    command: CleanupCommand,
+}
+
+#[derive(Debug, Subcommand)]
+enum CleanupCommand {
+    #[command(about = "Remove roleman-created IAM roles in the current account")]
+    Roles(CleanupRolesArgs),
+}
+
+#[derive(Debug, Args)]
+struct CleanupRolesArgs {
+    #[arg(
+        short = 'a',
+        long = "account",
+        help = "Configured identity name (selects the region used for IAM calls)"
+    )]
+    account: Option<String>,
+
+    #[arg(
+        long = "all",
+        help = "Sweep every account reachable via SSO (slower; mints credentials per account)"
+    )]
+    all: bool,
+
+    #[arg(long = "dry-run", help = "List what would be removed without deleting")]
+    dry_run: bool,
+
+    #[arg(short = 'y', long = "yes", help = "Delete without confirmation")]
+    yes: bool,
+
+    #[arg(long = "config", help = "Path to config.toml")]
+    config_path: Option<PathBuf>,
 }
 
 #[derive(Debug, Args)]
@@ -364,6 +420,13 @@ fn main() {
             }
             return;
         }
+        Some(CliCommand::Cleanup(args)) => {
+            if let Err(err) = handle_cleanup(args) {
+                eprintln!("error: {err}");
+                std::process::exit(1);
+            }
+            return;
+        }
         _ => {}
     }
 
@@ -432,6 +495,12 @@ fn app_options_from_parts(
         initial_query: common.initial_query.clone(),
         selector_sort: common.sort.map(Into::into),
         action,
+        scope: if common.readonly {
+            AccessScope::ReadOnly
+        } else {
+            AccessScope::Full
+        },
+        assume_yes: common.assume_yes,
     }
 }
 
@@ -448,6 +517,8 @@ fn merge_common_args(parent: &CommonArgs, child: &CommonArgs) -> CommonArgs {
         account: child.account.clone().or_else(|| parent.account.clone()),
         no_cache: child.no_cache || parent.no_cache,
         show_all: child.show_all || parent.show_all,
+        readonly: child.readonly || parent.readonly,
+        assume_yes: child.assume_yes || parent.assume_yes,
         sort: child.sort.or(parent.sort),
         initial_query: child
             .initial_query
@@ -479,6 +550,9 @@ fn merge_list_args(parent: &CommonArgs, args: &ListArgs) -> CommonArgs {
         account: args.account.clone().or_else(|| parent.account.clone()),
         no_cache: args.no_cache || parent.no_cache,
         show_all: args.show_all || parent.show_all,
+        // list never mints credentials, so scope is irrelevant; carry the parent flags.
+        readonly: parent.readonly,
+        assume_yes: parent.assume_yes,
         sort: args.sort.or(parent.sort),
         initial_query: None,
         refresh_seconds: args.refresh_seconds.or(parent.refresh_seconds),
@@ -550,6 +624,19 @@ fn handle_history(args: &HistoryArgs) -> Result<(), String> {
     }
 
     Ok(())
+}
+
+fn handle_cleanup(args: &CleanupArgs) -> Result<(), String> {
+    let CleanupCommand::Roles(roles) = &args.command;
+    let options = AppOptions {
+        account: roles.account.clone(),
+        config_path: roles.config_path.clone(),
+        ..AppOptions::default()
+    };
+    let runtime = tokio::runtime::Runtime::new().map_err(|err| err.to_string())?;
+    runtime
+        .block_on(App::new(options).cleanup_roles(roles.dry_run, roles.yes, roles.all))
+        .map_err(|err| err.to_string())
 }
 
 fn handle_list(args: &ListArgs, options: AppOptions) -> Result<(), String> {
@@ -986,6 +1073,67 @@ mod tests {
         let options = build_app_options(&cli);
         assert!(options.focus_terminal_after_auth);
         assert!(!options.close_auth_tab);
+    }
+
+    #[test]
+    fn parses_readonly_flag() {
+        let cli = Cli::try_parse_from(["roleman", "set", "--readonly"])
+            .expect("expected --readonly to parse");
+        let options = build_app_options(&cli);
+        assert_eq!(options.scope, roleman::AccessScope::ReadOnly);
+        assert!(matches!(options.action, AppAction::Set));
+    }
+
+    #[test]
+    fn defaults_to_full_scope_without_readonly() {
+        let cli = Cli::try_parse_from(["roleman", "set"]).expect("expected set to parse");
+        let options = build_app_options(&cli);
+        assert_eq!(options.scope, roleman::AccessScope::Full);
+        assert!(!options.assume_yes);
+    }
+
+    #[test]
+    fn parses_yes_flag() {
+        let cli = Cli::try_parse_from(["roleman", "set", "--readonly", "--yes"])
+            .expect("expected --yes to parse");
+        let options = build_app_options(&cli);
+        assert!(options.assume_yes);
+        assert_eq!(options.scope, roleman::AccessScope::ReadOnly);
+    }
+
+    #[test]
+    fn parses_cleanup_roles_with_flags() {
+        let cli = Cli::try_parse_from(["roleman", "cleanup", "roles", "--dry-run"])
+            .expect("expected cleanup roles to parse");
+        match cli.command {
+            Some(CliCommand::Cleanup(args)) => {
+                let super::CleanupCommand::Roles(roles) = args.command;
+                assert!(roles.dry_run);
+                assert!(!roles.yes);
+                assert!(!roles.all);
+            }
+            _ => panic!("expected cleanup command"),
+        }
+    }
+
+    #[test]
+    fn parses_cleanup_roles_all() {
+        let cli = Cli::try_parse_from(["roleman", "cleanup", "roles", "--all", "--yes"])
+            .expect("expected cleanup roles --all to parse");
+        match cli.command {
+            Some(CliCommand::Cleanup(args)) => {
+                let super::CleanupCommand::Roles(roles) = args.command;
+                assert!(roles.all);
+                assert!(roles.yes);
+            }
+            _ => panic!("expected cleanup command"),
+        }
+    }
+
+    #[test]
+    fn cleanup_requires_a_target() {
+        // `roleman cleanup` with no subcommand is an error (must say `roles`).
+        assert!(Cli::try_parse_from(["roleman", "cleanup"]).is_err());
     }
 
     #[test]

@@ -1,6 +1,6 @@
 use std::process::{Command, Stdio};
 
-use crate::aws_config;
+use super::config as aws_config;
 use crate::desktop;
 use crate::error::{Error, Result};
 use crate::ui;

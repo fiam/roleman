@@ -1,7 +1,7 @@
 mod common;
 
 use common::{MockServerOptions, lock_env, start_mock_server};
-use roleman::aws_sdk;
+use roleman::provider::aws::sdk as aws_sdk;
 
 #[tokio::test]
 async fn e2e_sso_flow_uses_mock_endpoints() {

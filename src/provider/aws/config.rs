@@ -240,6 +240,8 @@ mod tests {
             name: "work".into(),
             start_url: "https://example.awsapps.com/start".into(),
             sso_region: "us-east-1".into(),
+            provider: crate::config::ProviderKind::Aws,
+            readonly_policy: None,
             accounts: Vec::new(),
             ignore_roles: Vec::new(),
         };

@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 use sha1::{Digest, Sha1};
 
 use crate::error::{Error, Result};
-use crate::model::AwsRoleCredentials;
+use crate::provider::AccessScope;
 use crate::roles_cache::roleman_cache_dir;
 
 const EXPIRY_SAFETY_SECS: u64 = 60;
@@ -18,60 +18,38 @@ pub enum CachedCredentialsStatus {
     Missing,
 }
 
+/// On-disk envelope: an expiration we can check without parsing the opaque payload,
+/// plus the provider-specific credential JSON it produced.
 #[derive(Debug, Serialize, Deserialize)]
 struct CachedCredentials {
-    access_key_id: String,
-    secret_access_key: String,
-    session_token: String,
     expiration_ms: u64,
+    payload: String,
 }
 
-pub fn load_cached_credentials(
-    start_url: &str,
-    region: &str,
+/// Load the cached credential payload for a target, or `None` if missing/expired.
+pub fn load_cached_payload(
+    namespace: &str,
     account_id: &str,
     role_name: &str,
-) -> Result<Option<AwsRoleCredentials>> {
-    let path = cache_path(start_url, region, account_id, role_name)?;
-    if !path.exists() {
+    scope: AccessScope,
+) -> Result<Option<String>> {
+    let Some(cached) = read(namespace, account_id, role_name, scope)? else {
         return Ok(None);
-    }
-    let data = match fs::read_to_string(&path) {
-        Ok(data) => data,
-        Err(_) => return Ok(None),
-    };
-    let cached: CachedCredentials = match serde_json::from_str(&data) {
-        Ok(cached) => cached,
-        Err(_) => return Ok(None),
     };
     if is_expired(cached.expiration_ms)? {
         return Ok(None);
     }
-    Ok(Some(AwsRoleCredentials {
-        access_key_id: cached.access_key_id,
-        secret_access_key: cached.secret_access_key,
-        session_token: cached.session_token,
-        expiration: cached.expiration_ms,
-    }))
+    Ok(Some(cached.payload))
 }
 
 pub fn cached_credentials_status(
-    start_url: &str,
-    region: &str,
+    namespace: &str,
     account_id: &str,
     role_name: &str,
+    scope: AccessScope,
 ) -> Result<CachedCredentialsStatus> {
-    let path = cache_path(start_url, region, account_id, role_name)?;
-    if !path.exists() {
+    let Some(cached) = read(namespace, account_id, role_name, scope)? else {
         return Ok(CachedCredentialsStatus::Missing);
-    }
-    let data = match fs::read_to_string(&path) {
-        Ok(data) => data,
-        Err(_) => return Ok(CachedCredentialsStatus::Missing),
-    };
-    let cached: CachedCredentials = match serde_json::from_str(&data) {
-        Ok(cached) => cached,
-        Err(_) => return Ok(CachedCredentialsStatus::Missing),
     };
     if is_expired(cached.expiration_ms)? {
         Ok(CachedCredentialsStatus::Expired)
@@ -80,22 +58,21 @@ pub fn cached_credentials_status(
     }
 }
 
-pub fn save_cached_credentials(
-    start_url: &str,
-    region: &str,
+pub fn save_cached_payload(
+    namespace: &str,
     account_id: &str,
     role_name: &str,
-    creds: &AwsRoleCredentials,
+    scope: AccessScope,
+    expiration_ms: u64,
+    payload: &str,
 ) -> Result<()> {
-    let path = cache_path(start_url, region, account_id, role_name)?;
+    let path = cache_path(namespace, account_id, role_name, scope)?;
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).map_err(|_| Error::MissingCache)?;
     }
     let cached = CachedCredentials {
-        access_key_id: creds.access_key_id.clone(),
-        secret_access_key: creds.secret_access_key.clone(),
-        session_token: creds.session_token.clone(),
-        expiration_ms: creds.expiration,
+        expiration_ms,
+        payload: payload.to_string(),
     };
     let data =
         serde_json::to_string(&cached).map_err(|_| Error::CacheParse { path: path.clone() })?;
@@ -103,17 +80,44 @@ pub fn save_cached_credentials(
     Ok(())
 }
 
-fn cache_path(start_url: &str, region: &str, account_id: &str, role_name: &str) -> Result<PathBuf> {
-    let cache_dir = roleman_cache_dir()?;
-    Ok(cache_dir.join(cache_filename(start_url, region, account_id, role_name)))
+fn read(
+    namespace: &str,
+    account_id: &str,
+    role_name: &str,
+    scope: AccessScope,
+) -> Result<Option<CachedCredentials>> {
+    let path = cache_path(namespace, account_id, role_name, scope)?;
+    if !path.exists() {
+        return Ok(None);
+    }
+    let data = match fs::read_to_string(&path) {
+        Ok(data) => data,
+        Err(_) => return Ok(None),
+    };
+    Ok(serde_json::from_str(&data).ok())
 }
 
-fn cache_filename(start_url: &str, region: &str, account_id: &str, role_name: &str) -> String {
+fn cache_path(
+    namespace: &str,
+    account_id: &str,
+    role_name: &str,
+    scope: AccessScope,
+) -> Result<PathBuf> {
+    let cache_dir = roleman_cache_dir()?;
+    Ok(cache_dir.join(cache_filename(namespace, account_id, role_name, scope)))
+}
+
+fn cache_filename(
+    namespace: &str,
+    account_id: &str,
+    role_name: &str,
+    scope: AccessScope,
+) -> String {
     let mut hasher = Sha1::new();
-    hasher.update(start_url.as_bytes());
-    hasher.update(region.as_bytes());
+    hasher.update(namespace.as_bytes());
     hasher.update(account_id.as_bytes());
     hasher.update(role_name.as_bytes());
+    hasher.update(scope.cache_tag().as_bytes());
     let digest = hasher.finalize();
     format!("creds-{:x}.json", digest)
 }
@@ -132,94 +136,103 @@ mod tests {
     use super::*;
     use tempfile::TempDir;
 
-    #[test]
-    fn caches_credentials_roundtrip() {
-        let _lock = crate::test_support::lock_env();
-        let temp = TempDir::new().unwrap();
-        let previous = std::env::var("XDG_CACHE_HOME").ok();
-        unsafe {
-            std::env::set_var("XDG_CACHE_HOME", temp.path());
-        }
-
-        let creds = AwsRoleCredentials {
-            access_key_id: "AKIA123".into(),
-            secret_access_key: "secret".into(),
-            session_token: "token".into(),
-            expiration: current_time_ms() + 120_000,
-        };
-        save_cached_credentials(
-            "https://example.awsapps.com/start",
-            "us-east-1",
-            "1234",
-            "Admin",
-            &creds,
-        )
-        .unwrap();
-        let loaded = load_cached_credentials(
-            "https://example.awsapps.com/start",
-            "us-east-1",
-            "1234",
-            "Admin",
-        )
-        .unwrap()
-        .unwrap();
-        assert_eq!(loaded.access_key_id, "AKIA123");
-        assert_eq!(loaded.secret_access_key, "secret");
-
-        unsafe {
-            if let Some(value) = previous {
-                std::env::set_var("XDG_CACHE_HOME", value);
-            } else {
-                std::env::remove_var("XDG_CACHE_HOME");
-            }
-        }
-    }
-
-    #[test]
-    fn expired_credentials_are_ignored() {
-        let _lock = crate::test_support::lock_env();
-        let temp = TempDir::new().unwrap();
-        let previous = std::env::var("XDG_CACHE_HOME").ok();
-        unsafe {
-            std::env::set_var("XDG_CACHE_HOME", temp.path());
-        }
-
-        let creds = AwsRoleCredentials {
-            access_key_id: "AKIA123".into(),
-            secret_access_key: "secret".into(),
-            session_token: "token".into(),
-            expiration: current_time_ms().saturating_sub(120_000),
-        };
-        save_cached_credentials(
-            "https://example.awsapps.com/start",
-            "us-east-1",
-            "1234",
-            "Admin",
-            &creds,
-        )
-        .unwrap();
-        let loaded = load_cached_credentials(
-            "https://example.awsapps.com/start",
-            "us-east-1",
-            "1234",
-            "Admin",
-        )
-        .unwrap();
-        assert!(loaded.is_none());
-
-        unsafe {
-            if let Some(value) = previous {
-                std::env::set_var("XDG_CACHE_HOME", value);
-            } else {
-                std::env::remove_var("XDG_CACHE_HOME");
-            }
-        }
-    }
-
     fn current_time_ms() -> u64 {
         SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default()
             .as_millis() as u64
+    }
+
+    #[test]
+    fn caches_payload_roundtrip() {
+        let _lock = crate::test_support::lock_env();
+        let temp = TempDir::new().unwrap();
+        let previous = std::env::var("XDG_CACHE_HOME").ok();
+        unsafe {
+            std::env::set_var("XDG_CACHE_HOME", temp.path());
+        }
+
+        save_cached_payload(
+            "work",
+            "1234",
+            "Admin",
+            AccessScope::Full,
+            current_time_ms() + 120_000,
+            "{\"token\":\"abc\"}",
+        )
+        .unwrap();
+        let loaded = load_cached_payload("work", "1234", "Admin", AccessScope::Full).unwrap();
+        assert_eq!(loaded.as_deref(), Some("{\"token\":\"abc\"}"));
+
+        unsafe {
+            if let Some(value) = previous {
+                std::env::set_var("XDG_CACHE_HOME", value);
+            } else {
+                std::env::remove_var("XDG_CACHE_HOME");
+            }
+        }
+    }
+
+    #[test]
+    fn scopes_cache_separately() {
+        let _lock = crate::test_support::lock_env();
+        let temp = TempDir::new().unwrap();
+        let previous = std::env::var("XDG_CACHE_HOME").ok();
+        unsafe {
+            std::env::set_var("XDG_CACHE_HOME", temp.path());
+        }
+
+        save_cached_payload(
+            "work",
+            "1234",
+            "Admin",
+            AccessScope::Full,
+            current_time_ms() + 120_000,
+            "full",
+        )
+        .unwrap();
+        // ReadOnly scope must not see the Full-scope entry.
+        let readonly = load_cached_payload("work", "1234", "Admin", AccessScope::ReadOnly).unwrap();
+        assert!(readonly.is_none());
+
+        unsafe {
+            if let Some(value) = previous {
+                std::env::set_var("XDG_CACHE_HOME", value);
+            } else {
+                std::env::remove_var("XDG_CACHE_HOME");
+            }
+        }
+    }
+
+    #[test]
+    fn expired_payload_is_ignored() {
+        let _lock = crate::test_support::lock_env();
+        let temp = TempDir::new().unwrap();
+        let previous = std::env::var("XDG_CACHE_HOME").ok();
+        unsafe {
+            std::env::set_var("XDG_CACHE_HOME", temp.path());
+        }
+
+        save_cached_payload(
+            "work",
+            "1234",
+            "Admin",
+            AccessScope::Full,
+            current_time_ms().saturating_sub(120_000),
+            "stale",
+        )
+        .unwrap();
+        let loaded = load_cached_payload("work", "1234", "Admin", AccessScope::Full).unwrap();
+        assert!(loaded.is_none());
+        let status = cached_credentials_status("work", "1234", "Admin", AccessScope::Full).unwrap();
+        assert_eq!(status, CachedCredentialsStatus::Expired);
+
+        unsafe {
+            if let Some(value) = previous {
+                std::env::set_var("XDG_CACHE_HOME", value);
+            } else {
+                std::env::remove_var("XDG_CACHE_HOME");
+            }
+        }
     }
 }

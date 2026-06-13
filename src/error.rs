@@ -10,6 +10,10 @@ pub enum Error {
     CacheParse { path: PathBuf },
     #[error("aws sdk error: {0}")]
     AwsSdk(String),
+    #[error("failed to drop permissions: {0}")]
+    PermissionDrop(String),
+    #[error("{0}")]
+    NeedsResourceCreation(String),
     #[error("tui error: {0}")]
     Tui(String),
     #[error("no role selection was made")]

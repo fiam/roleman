@@ -17,6 +17,9 @@ pub struct Config {
     pub hook_prompt: Option<HookPromptMode>,
     #[serde(default)]
     pub selector_sort: SelectorSortMode,
+    /// When true, `--readonly` creates the roleman-owned read-only IAM role without prompting.
+    /// Creation is always announced regardless.
+    pub auto_create_readonly_roles: Option<bool>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -33,6 +36,34 @@ pub enum SelectorSortMode {
     #[default]
     Dynamic,
     Alphabetical,
+}
+
+/// Which cloud provider an identity authenticates against.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "kebab-case")]
+pub enum ProviderKind {
+    #[default]
+    Aws,
+    Gcp,
+}
+
+impl ProviderKind {
+    /// Whether this is the default provider; used to keep saved configs clean.
+    pub fn is_aws(&self) -> bool {
+        matches!(self, ProviderKind::Aws)
+    }
+}
+
+/// How `--readonly` drops write access for an identity (AWS).
+///
+/// Defaults to the AWS-managed `ReadOnlyAccess` policy when unset.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum ReadonlyPolicy {
+    /// Managed policy ARN(s) applied as STS session policies.
+    PolicyArns(Vec<String>),
+    /// Inline session policy document (JSON).
+    Inline(String),
 }
 
 impl Config {
@@ -66,10 +97,16 @@ pub struct SsoIdentity {
     pub name: String,
     pub start_url: String,
     pub sso_region: String,
+    /// Cloud provider for this identity. Defaults to AWS so existing configs load unchanged.
+    #[serde(default, skip_serializing_if = "ProviderKind::is_aws")]
+    pub provider: ProviderKind,
     #[serde(default)]
     pub accounts: Vec<AccountRule>,
     #[serde(default)]
     pub ignore_roles: Vec<String>,
+    /// Policy used to drop write access for `--readonly`. `None` uses the provider default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub readonly_policy: Option<ReadonlyPolicy>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -109,6 +146,8 @@ mod tests {
                 name: "work".into(),
                 start_url: "https://example.awsapps.com/start".into(),
                 sso_region: "us-east-1".into(),
+                provider: ProviderKind::Aws,
+                readonly_policy: None,
                 accounts: vec![AccountRule {
                     account_id: "1234".into(),
                     alias: Some("Main".into()),
@@ -125,6 +164,7 @@ mod tests {
             prompt_for_hook: None,
             hook_prompt: None,
             selector_sort: SelectorSortMode::Alphabetical,
+            auto_create_readonly_roles: None,
         };
 
         config.save(&path).unwrap();
@@ -138,6 +178,36 @@ mod tests {
         );
         assert_eq!(loaded.close_auth_tab, config.close_auth_tab);
         assert_eq!(loaded.selector_sort, config.selector_sort);
+    }
+
+    #[test]
+    fn identity_without_provider_defaults_to_aws() {
+        // Existing config files predate the `provider` field; they must still load as AWS.
+        let toml = r#"
+            [[identities]]
+            name = "work"
+            start_url = "https://example.awsapps.com/start"
+            sso_region = "us-east-1"
+        "#;
+        let config: Config = toml::from_str(toml).unwrap();
+        assert_eq!(config.identities[0].provider, ProviderKind::Aws);
+        assert_eq!(config.identities[0].readonly_policy, None);
+    }
+
+    #[test]
+    fn aws_provider_is_not_serialized() {
+        // Default provider is skipped so saved configs don't sprout `provider = "aws"`.
+        let identity = SsoIdentity {
+            name: "work".into(),
+            start_url: "https://example.awsapps.com/start".into(),
+            sso_region: "us-east-1".into(),
+            provider: ProviderKind::Aws,
+            readonly_policy: None,
+            accounts: Vec::new(),
+            ignore_roles: Vec::new(),
+        };
+        let serialized = toml::to_string_pretty(&identity).unwrap();
+        assert!(!serialized.contains("provider"));
     }
 
     #[test]

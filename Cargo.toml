@@ -32,8 +32,11 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 tracing-appender = "0.2"
 sha1 = "0.10"
+async-trait = "0.1"
 aws-config = "1"
+aws-sdk-iam = { version = "1", default-features = false, features = ["default-https-client", "rt-tokio"] }
 aws-sdk-sso = { version = "1", default-features = false, features = ["default-https-client", "rt-tokio"] }
+aws-sdk-sts = { version = "1", default-features = false, features = ["default-https-client", "rt-tokio"] }
 aws-types = "1"
 aws-smithy-types = "1"
 aws-smithy-runtime-api = "1"

@@ -8,10 +8,9 @@ use skim::tui::options::TuiLayout;
 use skim::tui::statusline::InfoDisplay;
 use tracing::{debug, trace};
 
-use crate::aws_config;
-use crate::credentials_cache::{self, CachedCredentialsStatus};
 use crate::error::{Error, Result};
 use crate::model::RoleChoice;
+use crate::provider::ActiveMarker;
 
 const SKIM_COLOR_OVERRIDES: &str =
     "dark,matched-bg:-1,bg+:-1,current:-1:reverse,current_match-bg:-1,current_match:-1:reverse";
@@ -36,8 +35,7 @@ impl SkimItem for ChoiceItem {
 pub fn select_role(
     prompt: &str,
     choices: &[RoleChoice],
-    start_url: &str,
-    region: &str,
+    markers: &[ActiveMarker],
     initial_query: Option<&str>,
 ) -> Result<Option<TuiSelection>> {
     if choices.is_empty() {
@@ -94,7 +92,7 @@ pub fn select_role(
         crate::ui::hint("Type to filter, ↑/↓ to navigate, ⏎ selects, ^o opens in browser.")
     );
 
-    let (selected, open_in_browser) = run_skim(options, &ordered, start_url, region)?;
+    let (selected, open_in_browser) = run_skim(options, &ordered, markers)?;
 
     if selected.is_empty() {
         debug!("no role selected");
@@ -144,49 +142,26 @@ fn find_single_query_match(
 fn run_skim(
     options: SkimOptions,
     choices: &[RoleChoice],
-    start_url: &str,
-    region: &str,
+    markers: &[ActiveMarker],
 ) -> Result<(Vec<RoleChoice>, bool)> {
     trace!(count = choices.len(), "preparing skim items");
-    let current_profile = std::env::var("AWS_PROFILE").ok();
-    let mut roles_per_account: std::collections::HashMap<&str, usize> =
-        std::collections::HashMap::new();
-    for choice in choices {
-        *roles_per_account
-            .entry(choice.account_id.as_str())
-            .or_insert(0) += 1;
-    }
+    let any_active = markers
+        .iter()
+        .any(|marker| *marker != ActiveMarker::Inactive);
     let mut lookup = std::collections::HashMap::new();
     let mut items = Vec::with_capacity(choices.len());
-    for choice in choices {
-        let omit_role_name = roles_per_account
-            .get(choice.account_id.as_str())
-            .copied()
-            .unwrap_or(0)
-            == 1;
-        let active_profile = aws_config::profile_name_for(choice, omit_role_name);
-        // Keep matching legacy profile names to preserve the active marker after upgrades.
-        let legacy_profile = aws_config::profile_name_for(choice, false);
-        let label = if let Some(profile) = current_profile.as_deref() {
-            let prefix = if profile == active_profile || profile == legacy_profile {
-                let status = match credentials_cache::cached_credentials_status(
-                    start_url,
-                    region,
-                    &choice.account_id,
-                    &choice.role_name,
-                ) {
-                    Ok(status) => status,
-                    Err(err) => {
-                        debug!(error = %err, "failed to check cached credentials");
-                        CachedCredentialsStatus::Expired
-                    }
-                };
-                match status {
-                    CachedCredentialsStatus::Valid => "* ",
-                    CachedCredentialsStatus::Expired | CachedCredentialsStatus::Missing => "! ",
-                }
-            } else {
-                "  "
+    for (index, choice) in choices.iter().enumerate() {
+        // The provider resolves which choice is active and whether its cached
+        // credentials are fresh; the TUI just renders the marker prefix.
+        let label = if any_active {
+            let prefix = match markers
+                .get(index)
+                .copied()
+                .unwrap_or(ActiveMarker::Inactive)
+            {
+                ActiveMarker::ActiveValid => "* ",
+                ActiveMarker::ActiveStale => "! ",
+                ActiveMarker::Inactive => "  ",
             };
             format!("{}{}", prefix, choice.label())
         } else {

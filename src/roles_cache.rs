@@ -23,8 +23,8 @@ struct CachedRole {
     role_name: String,
 }
 
-pub fn load_cached_roles(start_url: &str) -> Result<Option<(Vec<RoleChoice>, Duration)>> {
-    let cached = load_cached_roles_with_age(start_url)?;
+pub fn load_cached_roles(namespace: &str) -> Result<Option<(Vec<RoleChoice>, Duration)>> {
+    let cached = load_cached_roles_with_age(namespace)?;
     if let Some((choices, age)) = cached
         && age <= ROLES_CACHE_TTL
     {
@@ -33,9 +33,9 @@ pub fn load_cached_roles(start_url: &str) -> Result<Option<(Vec<RoleChoice>, Dur
     Ok(None)
 }
 
-pub fn load_cached_roles_with_age(start_url: &str) -> Result<Option<(Vec<RoleChoice>, Duration)>> {
+pub fn load_cached_roles_with_age(namespace: &str) -> Result<Option<(Vec<RoleChoice>, Duration)>> {
     let cache_dir = roleman_cache_dir()?;
-    let path = cache_dir.join(cache_filename(start_url));
+    let path = cache_dir.join(cache_filename(namespace));
     if !path.exists() {
         return Ok(None);
     }
@@ -66,10 +66,10 @@ pub fn load_cached_roles_with_age(start_url: &str) -> Result<Option<(Vec<RoleCho
     Ok(Some((choices, age)))
 }
 
-pub fn save_cached_roles(start_url: &str, choices: &[RoleChoice]) -> Result<()> {
+pub fn save_cached_roles(namespace: &str, choices: &[RoleChoice]) -> Result<()> {
     let cache_dir = roleman_cache_dir()?;
     fs::create_dir_all(&cache_dir).map_err(|_| Error::MissingCache)?;
-    let path = cache_dir.join(cache_filename(start_url));
+    let path = cache_dir.join(cache_filename(namespace));
     let cached = CachedRoles {
         fetched_at: SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -113,9 +113,9 @@ pub fn roleman_cache_dir() -> Result<PathBuf> {
     }
 }
 
-fn cache_filename(start_url: &str) -> String {
+fn cache_filename(namespace: &str) -> String {
     let mut hasher = Sha1::new();
-    hasher.update(start_url.as_bytes());
+    hasher.update(namespace.as_bytes());
     let digest = hasher.finalize();
     format!("roles-{:x}.json", digest)
 }

@@ -1,14 +1,11 @@
-mod aws_cli;
-mod aws_config;
-pub mod aws_sdk;
 pub mod config;
 mod credentials_cache;
 mod desktop;
 mod error;
 pub mod history;
 mod model;
+pub mod provider;
 mod roles_cache;
-mod sso_cache;
 mod tui;
 pub mod ui;
 
@@ -16,8 +13,9 @@ pub use crate::config::Config;
 use crate::config::{SelectorSortMode, SsoIdentity};
 pub use crate::error::{Error, Result};
 pub use crate::model::RoleChoice;
-use crate::model::{CacheEntry, EnvVars};
-use futures::StreamExt;
+pub use crate::provider::AccessScope;
+use crate::provider::{CloudProvider, PostLoginActions, ProviderCredentials, ProviderSession};
+use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
 use tracing::debug;
 
@@ -50,6 +48,9 @@ pub struct AppOptions {
     pub initial_query: Option<String>,
     pub selector_sort: Option<SelectorSortMode>,
     pub action: AppAction,
+    pub scope: AccessScope,
+    /// Skip the interactive confirmation before roleman creates a cloud resource.
+    pub assume_yes: bool,
 }
 
 impl App {
@@ -58,21 +59,206 @@ impl App {
     }
 
     pub async fn list_roles(&self) -> Result<Vec<RoleChoice>> {
-        Ok(self.prepare_visible_roles().await?.visible)
+        let (mut config, config_path) = Config::load(self.options.config_path.as_deref())?;
+        let config_exists = config_path.exists();
+        let identity = resolve_identity(&self.options, &mut config, &config_path, config_exists)?;
+        let provider = provider::for_identity(&identity)?;
+        Ok(self
+            .prepare_visible_roles(provider.as_ref(), &identity)
+            .await?
+            .visible)
+    }
+
+    /// Scan for roleman-created cloud resources and remove them.
+    ///
+    /// By default uses the ambient credentials (whatever is active in the shell) and operates
+    /// on the account you are currently in. With `all`, it uses the SSO session to sweep every
+    /// reachable account (slower, mints credentials per account). With `dry_run`, lists without
+    /// deleting.
+    pub async fn cleanup_roles(&self, dry_run: bool, assume_yes: bool, all: bool) -> Result<()> {
+        let (mut config, config_path) = Config::load(self.options.config_path.as_deref())?;
+        let config_exists = config_path.exists();
+        let identity = resolve_identity(&self.options, &mut config, &config_path, config_exists)?;
+        let provider = provider::for_identity(&identity)?;
+
+        if all {
+            return self
+                .cleanup_roles_all(provider.as_ref(), &config, dry_run, assume_yes)
+                .await;
+        }
+
+        // Identify the current account from ambient credentials (works even from a read-only
+        // shell), but do the IAM work with fresh privileged credentials minted via SSO.
+        let account = provider.current_account().await?;
+        let post_login_actions = resolve_post_login_actions(&self.options, &config);
+        let session = provider
+            .ensure_session(self.options.ignore_cache, post_login_actions)
+            .await?;
+
+        eprintln!(
+            "{}",
+            ui::info(&format!(
+                "Scanning account {account} for roleman-managed resources..."
+            ))
+        );
+        let resources = provider
+            .list_managed_resources_in(session.as_ref(), &account)
+            .await?;
+        if resources.is_empty() {
+            eprintln!(
+                "{}",
+                ui::info("No roleman-managed resources found in this account.")
+            );
+            return Ok(());
+        }
+        for resource in &resources {
+            eprintln!("  {} {} — {}", resource.kind, resource.id, resource.detail);
+        }
+        if dry_run {
+            eprintln!("{}", ui::info("Dry run: nothing was deleted."));
+            return Ok(());
+        }
+        if !assume_yes
+            && !prompt_yes_no(&format!(
+                "Delete {} resource(s) in account {account}? [y/N] ",
+                resources.len()
+            ))?
+        {
+            eprintln!("{}", ui::info("Aborted; nothing was deleted."));
+            return Ok(());
+        }
+        for resource in &resources {
+            provider
+                .delete_managed_resource_in(session.as_ref(), resource)
+                .await?;
+            eprintln!(
+                "{}",
+                ui::action(&format!("Deleted {} {}", resource.kind, resource.id))
+            );
+        }
+        eprintln!(
+            "{}",
+            ui::success(&format!("Removed {} resource(s).", resources.len()))
+        );
+        Ok(())
+    }
+
+    async fn cleanup_roles_all(
+        &self,
+        provider: &dyn CloudProvider,
+        config: &Config,
+        dry_run: bool,
+        assume_yes: bool,
+    ) -> Result<()> {
+        let post_login_actions = resolve_post_login_actions(&self.options, config);
+        let session = provider
+            .ensure_session(self.options.ignore_cache, post_login_actions)
+            .await?;
+
+        let spinner =
+            ui::spinner("Scanning all reachable accounts for roleman-managed resources...");
+        let accounts = provider
+            .list_managed_resources_all(session.as_ref(), &|status: &str| {
+                spinner.set_message(status.to_string());
+            })
+            .await?;
+        spinner.finish_and_clear();
+
+        let mut total = 0usize;
+        for account in &accounts {
+            if let Some(err) = &account.error {
+                debug!(account = %account.account_id, error = %err, "skipped account during cleanup sweep");
+                continue;
+            }
+            if account.resources.is_empty() {
+                continue;
+            }
+            eprintln!("{} ({})", account.account_name, account.account_id);
+            for resource in &account.resources {
+                total += 1;
+                eprintln!("  {} {} — {}", resource.kind, resource.id, resource.detail);
+            }
+        }
+        let skipped = accounts.iter().filter(|a| a.error.is_some()).count();
+        if skipped > 0 {
+            eprintln!(
+                "{}",
+                ui::info(&format!(
+                    "{skipped} account(s) skipped (no IAM access; roleman can't have created roles there)."
+                ))
+            );
+        }
+        if total == 0 {
+            eprintln!(
+                "{}",
+                ui::info("No roleman-managed resources found in any account.")
+            );
+            return Ok(());
+        }
+        if dry_run {
+            eprintln!("{}", ui::info("Dry run: nothing was deleted."));
+            return Ok(());
+        }
+        if !assume_yes
+            && !prompt_yes_no(&format!(
+                "Delete {total} resource(s) across all accounts? [y/N] "
+            ))?
+        {
+            eprintln!("{}", ui::info("Aborted; nothing was deleted."));
+            return Ok(());
+        }
+        let mut removed = 0usize;
+        for account in &accounts {
+            for resource in &account.resources {
+                match provider
+                    .delete_managed_resource_in(session.as_ref(), resource)
+                    .await
+                {
+                    Ok(()) => {
+                        removed += 1;
+                        eprintln!(
+                            "{}",
+                            ui::action(&format!(
+                                "Deleted {} {} in {}",
+                                resource.kind, resource.id, account.account_id
+                            ))
+                        );
+                    }
+                    Err(err) => eprintln!(
+                        "{}",
+                        ui::warn(&format!(
+                            "Failed to delete {} {} in {}: {err}",
+                            resource.kind, resource.id, account.account_id
+                        ))
+                    ),
+                }
+            }
+        }
+        eprintln!(
+            "{}",
+            ui::success(&format!("Removed {removed} of {total} resource(s)."))
+        );
+        Ok(())
     }
 
     pub async fn run(&self) -> Result<()> {
         let (mut config, config_path) = Config::load(self.options.config_path.as_deref())?;
         let config_exists = config_path.exists();
         let identity = resolve_identity(&self.options, &mut config, &config_path, config_exists)?;
+        let provider = provider::for_identity(&identity)?;
         let post_login_actions = resolve_post_login_actions(&self.options, &config);
+        let scope = self.options.scope;
 
         if matches!(self.options.action, AppAction::Login) {
-            cache_token(&identity, self.options.ignore_cache, post_login_actions).await?;
+            provider
+                .ensure_session(self.options.ignore_cache, post_login_actions)
+                .await?;
             return Ok(());
         }
 
-        let context = self.prepare_visible_roles().await?;
+        let context = self
+            .prepare_visible_roles(provider.as_ref(), &identity)
+            .await?;
 
         let prompt = match self.options.action {
             AppAction::Set => "roleman> ",
@@ -80,11 +266,11 @@ impl App {
             AppAction::Login => unreachable!("login exits before role selection"),
             AppAction::List => unreachable!("list is handled by App::list_roles"),
         };
+        let markers = provider.active_markers(&context.visible, scope);
         let selected = select_role_async(
             prompt,
             &context.visible,
-            &context.start_url,
-            &context.cache.region,
+            markers,
             self.options.initial_query.as_deref(),
         )
         .await?;
@@ -106,75 +292,74 @@ impl App {
                 debug!(error = %err, "failed to record history selection");
             }
             if matches!(self.options.action, AppAction::Set) && selection.open_in_browser {
-                let url = console_url(&context.start_url, &choice.account_id, &choice.role_name);
+                let url = provider.console_url(&choice);
                 eprintln!("{}", ui::action(&format!("Opening {url}")));
                 open_in_browser(&url)?;
                 return Ok(());
             }
             match self.options.action {
                 AppAction::Set => {
-                    let cached_credentials = if self.options.ignore_cache {
+                    let namespace = provider.cache_namespace();
+                    let cached = if self.options.ignore_cache {
                         None
+                    } else if let Some(json) = credentials_cache::load_cached_payload(
+                        &namespace,
+                        &choice.account_id,
+                        &choice.role_name,
+                        scope,
+                    )? {
+                        Some(provider.credentials_from_cache_json(&json)?)
                     } else {
-                        credentials_cache::load_cached_credentials(
-                            &context.start_url,
-                            &context.cache.region,
-                            &choice.account_id,
-                            &choice.role_name,
-                        )?
+                        None
                     };
-                    let creds = if let Some(creds) = cached_credentials {
+                    let creds = if let Some(creds) = cached {
                         tracing::debug!("using cached role credentials");
                         eprintln!("{}", ui::info("Using cached role credentials."));
                         creds
                     } else {
                         tracing::debug!("fetching role credentials");
-                        let spinner = ui::spinner("Fetching role credentials...");
-                        let fresh = aws_sdk::get_role_credentials(
-                            &context.cache.access_token,
-                            &context.cache.region,
-                            &choice.account_id,
-                            &choice.role_name,
+                        let may_create = config.auto_create_readonly_roles.unwrap_or(false)
+                            || self.options.assume_yes;
+                        let fresh = fetch_with_consent(
+                            provider.as_ref(),
+                            context.session.as_ref(),
+                            &choice,
+                            scope,
+                            may_create,
                         )
                         .await?;
-                        spinner.finish_with_message(ui::success("Fetched role credentials"));
-                        credentials_cache::save_cached_credentials(
-                            &context.start_url,
-                            &context.cache.region,
+                        credentials_cache::save_cached_payload(
+                            &namespace,
                             &choice.account_id,
                             &choice.role_name,
-                            &fresh,
+                            scope,
+                            fresh.expiration_ms(),
+                            &fresh.to_cache_json()?,
                         )?;
                         tracing::debug!("role credentials received");
                         fresh
                     };
                     let omit_role_name =
                         has_single_role_for_account(&context.visible, &choice.account_id);
-                    let profile_name = aws_config::profile_name_for(&choice, omit_role_name);
-                    aws_config::ensure_role_profile(
-                        &profile_name,
+                    let binding = provider.ensure_profile(
+                        context.session.as_ref(),
                         &choice,
-                        &identity,
-                        &context.cache.region,
+                        scope,
+                        omit_role_name,
                     )?;
-                    let env = EnvVars::from_role_credentials(
-                        &creds,
-                        &profile_name,
-                        &context.cache.region,
-                    );
+                    let lines = provider::export_lines(&creds.env_vars(&binding));
                     if let Some(path) = env_file_path(&self.options) {
                         tracing::debug!(path = %path.display(), "writing env file");
-                        write_env_file(&path, &env)?;
+                        write_env_file(&path, &lines)?;
                     }
                     let should_print =
                         self.options.print_env || env_file_path(&self.options).is_none();
                     if should_print {
-                        println!("{}", env.to_export_lines());
+                        println!("{}", lines);
                     }
                 }
                 AppAction::Open => {
-                    let url =
-                        console_url(&context.start_url, &choice.account_id, &choice.role_name);
+                    let url = provider.console_url(&choice);
                     eprintln!("{}", ui::action(&format!("Opening {url}")));
                     open_in_browser(&url)?;
                 }
@@ -186,22 +371,23 @@ impl App {
         Ok(())
     }
 
-    async fn prepare_visible_roles(&self) -> Result<RoleSelectionContext> {
-        let (mut config, config_path) = Config::load(self.options.config_path.as_deref())?;
-        let config_exists = config_path.exists();
-        let identity = resolve_identity(&self.options, &mut config, &config_path, config_exists)?;
-        let start_url = identity.start_url.clone();
+    async fn prepare_visible_roles(
+        &self,
+        provider: &dyn CloudProvider,
+        identity: &SsoIdentity,
+    ) -> Result<RoleSelectionContext> {
+        let (config, _) = Config::load(self.options.config_path.as_deref())?;
         let refresh_seconds = self.options.refresh_seconds.or(config.refresh_seconds);
         let selector_sort = self.options.selector_sort.unwrap_or(config.selector_sort);
         let post_login_actions = resolve_post_login_actions(&self.options, &config);
 
-        let (mut cache, mut choices) =
-            fetch_choices_with_cache(&identity, self.options.ignore_cache, post_login_actions)
+        let (mut session, mut choices) =
+            fetch_choices_with_cache(provider, self.options.ignore_cache, post_login_actions)
                 .await?;
 
         apply_visible_role_preferences(
             &mut choices,
-            &identity,
+            identity,
             self.options.show_all,
             selector_sort,
             self.options.initial_query.as_deref(),
@@ -213,16 +399,16 @@ impl App {
         {
             loop {
                 tokio::time::sleep(std::time::Duration::from_secs(seconds)).await;
-                let (refreshed_cache, mut refreshed) = fetch_choices_with_cache(
-                    &identity,
+                let (refreshed_session, mut refreshed) = fetch_choices_with_cache(
+                    provider,
                     self.options.ignore_cache,
                     post_login_actions,
                 )
                 .await?;
-                cache = refreshed_cache;
+                session = refreshed_session;
                 apply_visible_role_preferences(
                     &mut refreshed,
-                    &identity,
+                    identity,
                     self.options.show_all,
                     selector_sort,
                     self.options.initial_query.as_deref(),
@@ -234,37 +420,24 @@ impl App {
             }
         }
 
-        Ok(RoleSelectionContext {
-            start_url,
-            cache,
-            visible,
-        })
+        Ok(RoleSelectionContext { session, visible })
     }
 }
 
 struct RoleSelectionContext {
-    start_url: String,
-    cache: CacheEntry,
+    session: Box<dyn ProviderSession>,
     visible: Vec<RoleChoice>,
 }
 
-fn write_env_file(path: &PathBuf, env: &EnvVars) -> Result<()> {
+fn write_env_file(path: &PathBuf, lines: &str) -> Result<()> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).map_err(|err| Error::Config(err.to_string()))?;
     }
-    std::fs::write(path, env.to_export_lines())
+    std::fs::write(path, lines)
         .map_err(|err| Error::Config(err.to_string()))
         .map(|_| {
             tracing::trace!(path = %path.display(), "wrote env file");
         })
-}
-
-fn console_url(start_url: &str, account_id: &str, role_name: &str) -> String {
-    let base = start_url.trim_end_matches('/');
-    format!(
-        "{base}/#/console?account_id={account_id}&role_name={role}",
-        role = urlencoding::encode(role_name)
-    )
 }
 
 fn open_in_browser(url: &str) -> Result<()> {
@@ -290,38 +463,87 @@ fn env_file_path(options: &AppOptions) -> Option<PathBuf> {
 async fn select_role_async(
     prompt: &str,
     choices: &[RoleChoice],
-    start_url: &str,
-    region: &str,
+    markers: Vec<crate::provider::ActiveMarker>,
     initial_query: Option<&str>,
 ) -> Result<Option<tui::TuiSelection>> {
     let prompt = prompt.to_string();
     let choices = choices.to_vec();
-    let start_url = start_url.to_string();
-    let region = region.to_string();
     let initial_query = initial_query.map(ToOwned::to_owned);
     tokio::task::spawn_blocking(move || {
-        tui::select_role(
-            &prompt,
-            &choices,
-            &start_url,
-            &region,
-            initial_query.as_deref(),
-        )
+        tui::select_role(&prompt, &choices, &markers, initial_query.as_deref())
     })
     .await
     .map_err(|err| Error::Tui(format!("failed to join tui task: {err}")))?
 }
 
-async fn fetch_choices_with_cache(
-    identity: &SsoIdentity,
-    ignore_cache: bool,
-    post_login_actions: aws_cli::PostLoginActions,
-) -> Result<(crate::model::CacheEntry, Vec<RoleChoice>)> {
-    let cache = cache_token(identity, ignore_cache, post_login_actions).await?;
-    let mut cached_fallback: Option<(Vec<RoleChoice>, std::time::Duration)> = None;
-    if !ignore_cache
-        && let Some((choices, age)) = roles_cache::load_cached_roles(&identity.start_url)?
+/// Fetch credentials, obtaining consent if the provider needs to create a cloud resource.
+///
+/// `may_create` pre-authorizes creation (config knob or `--yes`). Otherwise, on
+/// [`Error::NeedsResourceCreation`] we prompt interactively and retry; non-interactive runs
+/// get an actionable error instead of a silent hang.
+async fn fetch_with_consent(
+    provider: &dyn CloudProvider,
+    session: &dyn ProviderSession,
+    choice: &RoleChoice,
+    scope: AccessScope,
+    may_create: bool,
+) -> Result<Box<dyn ProviderCredentials>> {
+    let spinner = ui::spinner("Fetching role credentials...");
+    match provider
+        .fetch_credentials(session, choice, scope, may_create)
+        .await
     {
+        Ok(creds) => {
+            spinner.finish_with_message(ui::success("Fetched role credentials"));
+            Ok(creds)
+        }
+        Err(Error::NeedsResourceCreation(desc)) => {
+            spinner.finish_and_clear();
+            if !std::io::stdin().is_terminal() {
+                return Err(Error::NeedsResourceCreation(format!(
+                    "{desc}. Re-run interactively, pass --yes, or set \
+                     `auto_create_readonly_roles = true` in config."
+                )));
+            }
+            eprintln!("{}", ui::warn(&format!("{desc}.")));
+            if !prompt_yes_no("Create this role now? [y/N] ")? {
+                return Err(Error::NeedsResourceCreation(
+                    "declined to create the read-only role".to_string(),
+                ));
+            }
+            let spinner = ui::spinner("Creating role and fetching credentials...");
+            match provider
+                .fetch_credentials(session, choice, scope, true)
+                .await
+            {
+                Ok(creds) => {
+                    spinner.finish_with_message(ui::success("Fetched role credentials"));
+                    Ok(creds)
+                }
+                Err(err) => {
+                    spinner.finish_and_clear();
+                    Err(err)
+                }
+            }
+        }
+        Err(err) => {
+            spinner.finish_and_clear();
+            Err(err)
+        }
+    }
+}
+
+async fn fetch_choices_with_cache(
+    provider: &dyn CloudProvider,
+    ignore_cache: bool,
+    post_login_actions: PostLoginActions,
+) -> Result<(Box<dyn ProviderSession>, Vec<RoleChoice>)> {
+    let session = provider
+        .ensure_session(ignore_cache, post_login_actions)
+        .await?;
+    let namespace = provider.cache_namespace();
+
+    if !ignore_cache && let Some((choices, age)) = roles_cache::load_cached_roles(&namespace)? {
         eprintln!(
             "{}",
             ui::info(&format!(
@@ -329,21 +551,19 @@ async fn fetch_choices_with_cache(
                 roles_cache::format_age(age)
             ))
         );
-        return Ok((cache, choices));
-    }
-    if !ignore_cache
-        && let Some((choices, age)) = roles_cache::load_cached_roles_with_age(&identity.start_url)?
-    {
-        cached_fallback = Some((choices, age));
+        return Ok((session, choices));
     }
 
-    let mut choices = Vec::new();
-    let accounts_spinner = ui::spinner("Fetching SSO accounts...");
-    let mut accounts = match aws_sdk::list_accounts(&cache.access_token, &cache.region).await {
-        Ok(accounts) => accounts,
+    let cached_fallback = if ignore_cache {
+        None
+    } else {
+        roles_cache::load_cached_roles_with_age(&namespace)?
+    };
+
+    let choices = match provider.list_choices(session.as_ref()).await {
+        Ok(choices) => choices,
         Err(err) => {
             if let Some((choices, age)) = cached_fallback {
-                accounts_spinner.finish_and_clear();
                 eprintln!(
                     "{}",
                     ui::warn(&format!(
@@ -351,94 +571,14 @@ async fn fetch_choices_with_cache(
                         roles_cache::format_age(age)
                     ))
                 );
-                return Ok((cache, choices));
+                return Ok((session, choices));
             }
-            accounts_spinner.finish_and_clear();
             return Err(err);
         }
     };
-    accounts_spinner.finish_with_message(ui::success("Fetched SSO accounts"));
-    accounts.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
-    for account in &accounts {
-        debug!(account_id = %account.id, account_name = %account.name, "fetched account");
-    }
 
-    let roles_spinner = ui::spinner("Fetching roles for all accounts...");
-    let roles_by_account = futures::stream::iter(accounts.clone())
-        .map(|account| {
-            let token = cache.access_token.clone();
-            let region = cache.region.clone();
-            async move {
-                let roles = aws_sdk::list_account_roles(&token, &region, &account.id).await?;
-                Ok::<_, Error>((account, roles))
-            }
-        })
-        .buffer_unordered(10)
-        .collect::<Vec<_>>()
-        .await;
-
-    let roles_by_account = match roles_by_account.into_iter().collect::<Result<Vec<_>>>() {
-        Ok(roles) => roles,
-        Err(err) => {
-            if let Some((choices, age)) = cached_fallback {
-                roles_spinner.finish_and_clear();
-                eprintln!(
-                    "{}",
-                    ui::warn(&format!(
-                        "Failed to refresh account/role list; using cached data from {} ago.",
-                        roles_cache::format_age(age)
-                    ))
-                );
-                return Ok((cache, choices));
-            }
-            roles_spinner.finish_and_clear();
-            return Err(err);
-        }
-    };
-    roles_spinner.finish_with_message(ui::success("Fetched roles"));
-
-    for (account, roles) in roles_by_account {
-        for role in roles {
-            choices.push(RoleChoice::new(&account, &role));
-        }
-    }
-
-    roles_cache::save_cached_roles(&identity.start_url, &choices)?;
-    Ok((cache, choices))
-}
-
-async fn cache_token(
-    identity: &SsoIdentity,
-    ignore_cache: bool,
-    post_login_actions: aws_cli::PostLoginActions,
-) -> Result<crate::model::CacheEntry> {
-    let ignore_sso_cache = env_truthy("ROLEMAN_IGNORE_SSO_CACHE");
-    if !ignore_cache
-        && !ignore_sso_cache
-        && let Ok(entry) = sso_cache::load_valid_cache(&identity.start_url)
-    {
-        return Ok(entry);
-    }
-    if ignore_sso_cache {
-        eprintln!(
-            "{}",
-            ui::info("Ignoring cached SSO token due to ROLEMAN_IGNORE_SSO_CACHE.")
-        );
-    }
-    let session = aws_config::ensure_sso_session(identity)?;
-    aws_cli::sso_login_session(&session, post_login_actions)?;
-    sso_cache::load_valid_cache(&identity.start_url)
-}
-
-fn env_truthy(key: &str) -> bool {
-    let value = match std::env::var(key) {
-        Ok(value) => value,
-        Err(_) => return false,
-    };
-    matches!(
-        value.trim().to_lowercase().as_str(),
-        "1" | "true" | "yes" | "on"
-    )
+    roles_cache::save_cached_roles(&namespace, &choices)?;
+    Ok((session, choices))
 }
 
 fn apply_visible_role_preferences(
@@ -459,8 +599,8 @@ fn apply_visible_role_preferences(
     }
 }
 
-fn resolve_post_login_actions(options: &AppOptions, config: &Config) -> aws_cli::PostLoginActions {
-    aws_cli::PostLoginActions {
+fn resolve_post_login_actions(options: &AppOptions, config: &Config) -> PostLoginActions {
+    PostLoginActions {
         focus_terminal: options.focus_terminal_after_auth
             || config.focus_terminal_after_auth.unwrap_or(true),
         close_browser_tab: options.close_auth_tab || config.close_auth_tab.unwrap_or(false),
@@ -478,19 +618,16 @@ mod tests {
 
     #[test]
     fn writes_env_file() {
+        use crate::provider::{EnvVar, export_lines};
+
         let temp = TempDir::new().unwrap();
         let path = temp.path().join("env.sh");
-        let env = EnvVars {
-            access_key_id: "AKIA123".into(),
-            secret_access_key: "secret".into(),
-            session_token: "token".into(),
-            expiration_ms: 1_700_000_000_000,
-            region: "us-east-1".into(),
-            profile_name: "Acme-Cloud/ReadOnly".into(),
-            config_file: None,
-        };
+        let vars = vec![
+            EnvVar::new("AWS_ACCESS_KEY_ID", "AKIA123"),
+            EnvVar::new("AWS_PROFILE", "Acme-Cloud/ReadOnly"),
+        ];
 
-        write_env_file(&path, &env).unwrap();
+        write_env_file(&path, &export_lines(&vars)).unwrap();
         let contents = std::fs::read_to_string(path).unwrap();
         assert!(contents.contains("AWS_ACCESS_KEY_ID=AKIA123"));
         assert!(contents.contains("AWS_PROFILE=Acme-Cloud/ReadOnly"));
@@ -508,6 +645,8 @@ mod tests {
             name: "acme".into(),
             start_url: "https://acme.awsapps.com/start".into(),
             sso_region: "us-east-1".into(),
+            provider: config::ProviderKind::Aws,
+            readonly_policy: None,
             accounts: vec![
                 config::AccountRule {
                     account_id: "2222".into(),
@@ -554,19 +693,6 @@ mod tests {
     }
 
     #[test]
-    fn builds_console_url() {
-        let url = console_url(
-            "https://acme.awsapps.com/start/",
-            "123456789012",
-            "Read Only",
-        );
-        assert_eq!(
-            url,
-            "https://acme.awsapps.com/start/#/console?account_id=123456789012&role_name=Read%20Only"
-        );
-    }
-
-    #[test]
     fn detects_accounts_with_single_role() {
         let choices = vec![
             RoleChoice {
@@ -602,6 +728,7 @@ mod tests {
             prompt_for_hook: None,
             hook_prompt: None,
             selector_sort: SelectorSortMode::Dynamic,
+            auto_create_readonly_roles: None,
         };
         let options = AppOptions::default();
 
@@ -621,6 +748,7 @@ mod tests {
             prompt_for_hook: None,
             hook_prompt: None,
             selector_sort: SelectorSortMode::Dynamic,
+            auto_create_readonly_roles: None,
         };
         let options = AppOptions::default();
 
@@ -640,6 +768,7 @@ mod tests {
             prompt_for_hook: None,
             hook_prompt: None,
             selector_sort: SelectorSortMode::Dynamic,
+            auto_create_readonly_roles: None,
         };
         let options = AppOptions {
             focus_terminal_after_auth: true,
@@ -712,8 +841,10 @@ fn resolve_identity(
             name: "manual".to_string(),
             start_url,
             sso_region: region,
+            provider: crate::config::ProviderKind::Aws,
             accounts: Vec::new(),
             ignore_roles: Vec::new(),
+            readonly_policy: None,
         };
         if !matches!(options.action, AppAction::Login | AppAction::List)
             && !config_exists
@@ -816,8 +947,10 @@ fn maybe_save_account(
         name: final_name,
         start_url: account.start_url.clone(),
         sso_region: account.sso_region.clone(),
+        provider: account.provider,
         accounts: Vec::new(),
         ignore_roles: Vec::new(),
+        readonly_policy: account.readonly_policy.clone(),
     };
     config.default_identity = Some(account.name.clone());
     config.identities.push(account);
